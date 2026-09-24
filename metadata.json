@@ -1,0 +1,6 @@
+{
+  "name": "DataFix — Dataset Preparation SaaS",
+  "description": "Inspect, clean, and prepare datasets for machine-learning workflows without manually writing repetitive preprocessing code.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
