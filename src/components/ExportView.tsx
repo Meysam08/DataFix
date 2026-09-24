@@ -14,6 +14,7 @@ import {
 import { ActiveDataset } from '../types/dataset';
 import { ScreenId } from './Navbar';
 import { useI18n } from '../i18n/context';
+import { parseCsv } from '../utils/engine';
 
 interface ExportViewProps {
   dataset: ActiveDataset;
@@ -26,13 +27,33 @@ export const ExportView: React.FC<ExportViewProps> = ({ dataset, onNavigate, onR
   const [copied, setCopied] = useState(false);
 
   const cleanedCsv = dataset.cleanedCsv || dataset.rawCsv;
-  const analysis = dataset.analysis;
+  const initialAnalysis = dataset.analysis;
   const transform = dataset.currentTransform;
-  const pythonScript = transform?.python_code || '# Python reproducible pipeline\nimport pandas as pd\n';
+  const finalAnalysis = transform?.new_analysis || dataset.analysis;
+  const pythonScript =
+    transform?.python_code ||
+    `# DataFix Preprocessing Pipeline\n# Exported for dataset: ${dataset.filename}\nimport pandas as pd\ndf = pd.read_csv(${JSON.stringify(dataset.filename)})\nprint(df.shape)\n`;
 
-  // Download CSV
+  // Parse cleaned CSV to validate integrity and prepare complete JSON records
+  const { headers: parsedHeaders, rows: parsedRows } = parseCsv(cleanedCsv);
+
+  // Validate integrity
+  const isRowCountMatched = parsedRows.length === finalAnalysis.rows;
+  const isColCountMatched = parsedHeaders.length === finalAnalysis.columns.length;
+  const isIntegrityValid = isRowCountMatched && isColCountMatched && parsedHeaders.length > 0;
+
+  // Remaining defects check
+  const problematicColumnsCount = finalAnalysis.columns.filter(
+    (c) => c.missing_count > 0 || c.is_empty || c.type_inconsistencies > 0 || (c.stats && c.stats.outlier_count > 0)
+  ).length;
+
+  const rowsRemoved = Math.max(0, initialAnalysis.rows - finalAnalysis.rows);
+  const colsRemoved = Math.max(0, initialAnalysis.columns.length - finalAnalysis.columns.length);
+  const appliedOps = transform?.applied_operations || [];
+
+  // Download CSV with UTF-8 BOM for Microsoft Excel and Persian Unicode compatibility
   const handleDownloadCsv = () => {
-    const blob = new Blob([cleanedCsv], { type: 'text/csv;charset=utf-8;' });
+    const blob = new Blob(['\uFEFF' + cleanedCsv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -42,14 +63,22 @@ export const ExportView: React.FC<ExportViewProps> = ({ dataset, onNavigate, onR
     document.body.removeChild(link);
   };
 
-  // Download JSON
+  // Download JSON (Complete Cleaned Dataset, NEVER just preview rows)
   const handleDownloadJson = () => {
-    const jsonStr = JSON.stringify(transform?.preview_rows || [], null, 2);
+    const fullRecords = parsedRows.map((r: string[]) => {
+      const record: Record<string, any> = {};
+      parsedHeaders.forEach((h: string, cIdx: number) => {
+        record[h] = r[cIdx] !== undefined ? r[cIdx] : '';
+      });
+      return record;
+    });
+
+    const jsonStr = JSON.stringify(fullRecords, null, 2);
     const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `cleaned_${dataset.filename.replace(/\.csv$/, '')}.json`);
+    link.setAttribute('download', `cleaned_${dataset.filename.replace(/\.[^/.]+$/, '')}.json`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -59,27 +88,32 @@ export const ExportView: React.FC<ExportViewProps> = ({ dataset, onNavigate, onR
   const handleDownloadReport = () => {
     const report = `# DataFix Quality Audit & Cleaning Report
 Dataset: ${dataset.filename}
-Date: ${new Date().toISOString()}
+Export Date: ${new Date().toISOString()}
 
-## Dataset Hygiene Metrics
-- Initial Rows: ${transform?.original_rows || analysis.rows}
-- Final Rows: ${transform?.new_rows || analysis.rows}
-- Initial Quality Score: ${analysis.quality_score}%
-- Final Quality Score: ${transform?.new_quality_score || analysis.quality_score}%
+## Dataset Hygiene Metrics (Final Analysis)
+- Initial Rows: ${initialAnalysis.rows.toLocaleString()}
+- Final Cleaned Rows: ${finalAnalysis.rows.toLocaleString()} (Rows Removed: ${rowsRemoved})
+- Initial Columns: ${initialAnalysis.columns.length}
+- Final Feature Columns: ${finalAnalysis.columns.length} (Columns Removed: ${colsRemoved})
+- Initial Quality Score (DataFix Heuristic): ${initialAnalysis.quality_score}%
+- Final Quality Score (DataFix Heuristic): ${finalAnalysis.quality_score}%
+- Remaining Missing Cells: ${finalAnalysis.missing_values.toLocaleString()} (${finalAnalysis.missing_pct}%)
+- Remaining Duplicate Rows: ${finalAnalysis.duplicate_rows.toLocaleString()} (${finalAnalysis.duplicate_pct}%)
+- Remaining Problematic Columns: ${problematicColumnsCount}
 
-## Applied Transformations
-${transform?.applied_operations.map((op, i) => `${i + 1}. ${op}`).join('\n') || 'None'}
+## Applied Transformations (${appliedOps.length})
+${appliedOps.length > 0 ? appliedOps.map((op, i) => `${i + 1}. ${op}`).join('\n') : 'No transformations applied (Raw dataset exported)'}
 
 ## Reproducible Python Preprocessing Script
 \`\`\`python
 ${pythonScript}
 \`\`\`
 `;
-    const blob = new Blob([report], { type: 'text/markdown;charset=utf-8;' });
+    const blob = new Blob(['\uFEFF' + report], { type: 'text/markdown;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `datafix_audit_${dataset.filename.replace(/\.csv$/, '')}.md`);
+    link.setAttribute('download', `datafix_audit_${dataset.filename.replace(/\.[^/.]+$/, '')}.md`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -98,7 +132,15 @@ ${pythonScript}
         <div className="space-y-2">
           <div className="inline-flex items-center gap-2 text-xs font-mono text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 rounded px-2.5 py-1">
             <CheckCircle2 className="h-3.5 w-3.5" />
-            <span>{isRTL ? 'دیتاست با موفقیت پاک‌سازی و آماده شد' : 'Dataset Successfully Cleaned & Formatted'}</span>
+            <span>
+              {isIntegrityValid
+                ? isRTL
+                  ? 'دیتاست با موفقیت پاک‌سازی و ممیزی شد'
+                  : 'Dataset Successfully Cleaned & Validated'
+                : isRTL
+                ? 'هشدار: تناقض در صحت داده‌های خروجی'
+                : 'Warning: Dataset Validation Alert'}
+            </span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-neutral-100">
             {t('exportTitle')}
@@ -117,47 +159,75 @@ ${pythonScript}
         </button>
       </div>
 
+      {/* Dataset Validation Status Banner */}
+      {!isIntegrityValid && (
+        <div className="rounded-lg border border-amber-900/60 bg-amber-950/30 p-4 text-xs text-amber-300 flex items-start gap-3">
+          <div className="font-semibold">{isRTL ? 'هشدار تطابق اعتبارسنجی:' : 'Validation Mismatch Notice:'}</div>
+          <div>
+            {isRTL
+              ? `تعداد سطرهای خروجی (${parsedRows.length}) یا ستون‌ها (${parsedHeaders.length}) با گزارش تحلیل نهایی تطابق کامل ندارد.`
+              : `Exported row count (${parsedRows.length}) or column count (${parsedHeaders.length}) does not match the expected final analysis.`}
+          </div>
+        </div>
+      )}
+
       {/* Dataset Summary Metrics */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="p-4 rounded-lg border border-neutral-850 bg-neutral-900/60">
           <div className="text-xs font-mono text-neutral-400">{t('finalScoreMetric')}</div>
           <div className="mt-1 text-2xl font-bold font-mono text-emerald-400 tabular-nums">
-            {transform?.new_quality_score || analysis.quality_score}%
+            {finalAnalysis.quality_score}%
           </div>
           <div className="text-[11px] text-neutral-400">
-            {isRTL ? 'بدون جریمه مقادیر خالی یا تکراری' : 'Zero duplicate or null penalties'}
+            {finalAnalysis.missing_values === 0 && finalAnalysis.duplicate_rows === 0
+              ? isRTL
+                ? 'صفر کسری برای مقادیر خالی یا تکراری'
+                : 'Zero duplicate or null penalties'
+              : isRTL
+              ? `${finalAnalysis.missing_values.toLocaleString()} خالی · ${finalAnalysis.duplicate_rows.toLocaleString()} تکراری باقی‌مانده`
+              : `${finalAnalysis.missing_values.toLocaleString()} missing · ${finalAnalysis.duplicate_rows.toLocaleString()} duplicates remain`}
           </div>
         </div>
 
         <div className="p-4 rounded-lg border border-neutral-850 bg-neutral-900/60">
           <div className="text-xs font-mono text-neutral-400">{t('cleanedRowsMetric')}</div>
           <div className="mt-1 text-2xl font-bold font-mono text-neutral-100 tabular-nums">
-            {transform?.new_rows || analysis.rows}
+            {finalAnalysis.rows.toLocaleString()}
           </div>
           <div className="text-[11px] text-neutral-400">
-            {transform?.rows_removed
-              ? isRTL ? `${transform.rows_removed} سطر حذف شد` : `${transform.rows_removed} rows dropped`
-              : isRTL ? 'تمامی سطرها حفظ شدند' : 'All rows retained'}
+            {rowsRemoved > 0
+              ? isRTL
+                ? `${rowsRemoved.toLocaleString()} سطر حذف شد`
+                : `${rowsRemoved.toLocaleString()} rows dropped`
+              : isRTL
+              ? 'تمامی سطرها حفظ شدند'
+              : 'All rows retained'}
           </div>
         </div>
 
         <div className="p-4 rounded-lg border border-neutral-850 bg-neutral-900/60">
           <div className="text-xs font-mono text-neutral-400">{t('columnsMetric')}</div>
           <div className="mt-1 text-2xl font-bold font-mono text-neutral-100 tabular-nums">
-            {transform?.new_columns || analysis.columns.length}
+            {finalAnalysis.columns.length}
           </div>
           <div className="text-[11px] text-neutral-400">
-            {isRTL ? 'ساختار و انواع استاندارد' : 'Clean schema & types'}
+            {problematicColumnsCount === 0
+              ? isRTL
+                ? 'ساختار تمام ستون‌ها تأیید شد'
+                : 'All column schemas validated'
+              : isRTL
+              ? `${problematicColumnsCount} ستون دارای موارد نیازمند بررسی`
+              : `${problematicColumnsCount} columns with potential defects`}
           </div>
         </div>
 
         <div className="p-4 rounded-lg border border-neutral-850 bg-neutral-900/60">
           <div className="text-xs font-mono text-neutral-400">{t('auditTrailTitle')}</div>
           <div className="mt-1 text-2xl font-bold font-mono text-blue-400 tabular-nums">
-            {transform?.applied_operations.length || 0}
+            {appliedOps.length}
           </div>
           <div className="text-[11px] text-neutral-400">
-            {isRTL ? 'عملیات اعمال‌شده در خط لوله' : 'Applied in pipeline'}
+            {isRTL ? 'عملیات اعمال‌شده در خط لوله' : 'Operations in pipeline'}
           </div>
         </div>
       </div>
@@ -171,7 +241,7 @@ ${pythonScript}
             <div>
               <div className="flex items-center gap-2 text-xs font-mono text-neutral-400 mb-2">
                 <FileSpreadsheet className="h-4 w-4 text-emerald-400" />
-                <span>CSV File</span>
+                <span>{isRTL ? 'فایل CSV' : 'CSV File'}</span>
               </div>
               <h3 className="text-sm font-semibold text-neutral-100">{t('formatCsvTitle')}</h3>
               <p className="mt-1 text-xs text-neutral-400">
@@ -191,11 +261,13 @@ ${pythonScript}
             <div>
               <div className="flex items-center gap-2 text-xs font-mono text-neutral-400 mb-2">
                 <FileCode2 className="h-4 w-4 text-blue-400" />
-                <span>JSON Records</span>
+                <span>{isRTL ? 'رکوردهای کامل JSON' : 'Complete JSON Records'}</span>
               </div>
               <h3 className="text-sm font-semibold text-neutral-100">{t('formatJsonTitle')}</h3>
               <p className="mt-1 text-xs text-neutral-400">
-                {t('formatJsonDesc')}
+                {isRTL
+                  ? `خروجی تمام ${parsedRows.length.toLocaleString()} سطر دیتاست پاک‌سازی‌شده به فرمت کلید-مقدار JSON`
+                  : `All ${parsedRows.length.toLocaleString()} cleaned records exported in complete JSON structure.`}
               </p>
             </div>
             <button
@@ -203,7 +275,7 @@ ${pythonScript}
               className="mt-4 flex items-center justify-center gap-1.5 rounded bg-neutral-800 hover:bg-neutral-700 px-3 py-2 text-xs font-medium text-neutral-200 transition-colors cursor-pointer"
             >
               <Download className="h-3.5 w-3.5" />
-              <span>{t('downloadJsonBtn')}</span>
+              <span>{t('downloadJsonBtn')} ({parsedRows.length.toLocaleString()} rows)</span>
             </button>
           </div>
 
@@ -211,7 +283,7 @@ ${pythonScript}
             <div>
               <div className="flex items-center gap-2 text-xs font-mono text-neutral-400 mb-2">
                 <FileText className="h-4 w-4 text-amber-400" />
-                <span>Audit Report</span>
+                <span>{isRTL ? 'گزارش ممیزی' : 'Audit Report'}</span>
               </div>
               <h3 className="text-sm font-semibold text-neutral-100">{t('formatReportTitle')}</h3>
               <p className="mt-1 text-xs text-neutral-400">

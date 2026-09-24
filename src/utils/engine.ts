@@ -9,20 +9,23 @@ import {
   DiffSample
 } from '../types/dataset';
 
-function isEmptyVal(val: any): boolean {
+export function isEmptyVal(val: any): boolean {
   if (val === null || val === undefined) return true;
   const s = String(val).trim().toLowerCase();
   return ['', 'null', 'nan', 'none', 'na', 'n/a', '?', 'nil', '#n/a'].includes(s);
 }
 
-function tryParseNum(val: any): number | null {
+export function tryParseNum(val: any): number | null {
   if (isEmptyVal(val)) return null;
   const s = String(val).trim().replace(/,/g, '');
+  if (!/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(s)) {
+    return null;
+  }
   const n = Number(s);
-  return !isNaN(n) && isFinite(n) ? n : null;
+  return isFinite(n) ? n : null;
 }
 
-function isBool(val: any): boolean | null {
+export function isBool(val: any): boolean | null {
   if (isEmptyVal(val)) return null;
   const s = String(val).trim().toLowerCase();
   if (['true', 't', 'yes', '1'].includes(s)) return true;
@@ -30,69 +33,169 @@ function isBool(val: any): boolean | null {
   return null;
 }
 
-function isDateStr(val: any): boolean {
+export function isDateStr(val: any): boolean {
   if (isEmptyVal(val)) return false;
   const s = String(val).trim();
   if (s.length < 6) return false;
+  // Check for common date format patterns to avoid numbers being parsed as dates
+  if (
+    !/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test(s) &&
+    !/^\d{1,2}[-/.]\d{1,2}[-/.]\d{4}/.test(s) &&
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)
+  ) {
+    return false;
+  }
   const d = Date.parse(s);
   return !isNaN(d);
 }
 
-export function parseCsv(csvText: string): { headers: string[]; rows: string[][] } {
-  const lines = csvText.trim().split(/\r?\n/);
-  if (lines.length === 0) return { headers: [], rows: [] };
+export function formatCsvField(val: any): string {
+  if (val === null || val === undefined) return '';
+  const s = String(val);
+  if (
+    s.includes(',') ||
+    s.includes('"') ||
+    s.includes('\n') ||
+    s.includes('\r') ||
+    s.includes(';') ||
+    s.includes('\t') ||
+    /^\s|\s$/.test(s)
+  ) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
 
-  // Detect delimiter
-  const first100 = lines.slice(0, 5).join('\n');
-  const commaCount = (first100.match(/,/g) || []).length;
-  const semiCount = (first100.match(/;/g) || []).length;
-  const tabCount = (first100.match(/\t/g) || []).length;
+export function serializeCsv(headers: string[], rows: any[][]): string {
+  const headerLine = headers.map(formatCsvField).join(',');
+  const rowLines = rows.map((row) => row.map(formatCsvField).join(','));
+  return [headerLine, ...rowLines].join('\n');
+}
+
+export function parseCsv(csvText: string): { headers: string[]; rows: string[][] } {
+  if (!csvText || !csvText.trim()) return { headers: [], rows: [] };
+
+  // Strip UTF-8 BOM if present
+  let cleanText = csvText;
+  if (cleanText.charCodeAt(0) === 0xfeff) {
+    cleanText = cleanText.slice(1);
+  }
+
+  // Detect delimiter based on unquoted sample
+  const sample = cleanText.slice(0, 4096);
+  let commaCount = 0;
+  let semiCount = 0;
+  let tabCount = 0;
+  let inQ = false;
+  for (let i = 0; i < sample.length; i++) {
+    const c = sample[i];
+    if (c === '"') {
+      if (inQ && i + 1 < sample.length && sample[i + 1] === '"') {
+        i++;
+        continue;
+      }
+      inQ = !inQ;
+    } else if (!inQ) {
+      if (c === ',') commaCount++;
+      else if (c === ';') semiCount++;
+      else if (c === '\t') tabCount++;
+      else if (c === '\n') {
+        if (commaCount > 0 || semiCount > 0 || tabCount > 0) break;
+      }
+    }
+  }
 
   let delimiter = ',';
   if (semiCount > commaCount && semiCount > tabCount) delimiter = ';';
-  else if (tabCount > commaCount) delimiter = '\t';
+  else if (tabCount > commaCount && tabCount > semiCount) delimiter = '\t';
 
-  function splitLine(line: string): string[] {
-    const result: string[] = [];
-    let cur = '';
-    let inQuotes = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (c === '"') {
-        if (inQuotes && line[i + 1] === '"') {
-          cur += '"';
-          i++;
+  // Full RFC 4180 streaming state-machine parser
+  const parsedRows: string[][] = [];
+  let currentRow: string[] = [];
+  let currentField = '';
+  let inQuotes = false;
+  const len = cleanText.length;
+
+  for (let i = 0; i < len; i++) {
+    const char = cleanText[i];
+
+    if (inQuotes) {
+      if (char === '"') {
+        // Escaped double quote ("")
+        if (i + 1 < len && cleanText[i + 1] === '"') {
+          currentField += '"';
+          i++; // Skip the next quote
         } else {
-          inQuotes = !inQuotes;
+          inQuotes = false;
         }
-      } else if (c === delimiter && !inQuotes) {
-        result.push(cur.trim());
-        cur = '';
       } else {
-        cur += c;
+        currentField += char;
+      }
+    } else {
+      if (char === '"') {
+        inQuotes = true;
+      } else if (char === delimiter) {
+        currentRow.push(currentField);
+        currentField = '';
+      } else if (char === '\r') {
+        if (i + 1 < len && cleanText[i + 1] === '\n') {
+          i++;
+        }
+        currentRow.push(currentField);
+        currentField = '';
+        if (currentRow.length > 1 || (currentRow.length === 1 && currentRow[0] !== '')) {
+          parsedRows.push(currentRow);
+        }
+        currentRow = [];
+      } else if (char === '\n') {
+        currentRow.push(currentField);
+        currentField = '';
+        if (currentRow.length > 1 || (currentRow.length === 1 && currentRow[0] !== '')) {
+          parsedRows.push(currentRow);
+        }
+        currentRow = [];
+      } else {
+        currentField += char;
       }
     }
-    result.push(cur.trim());
-    return result;
   }
 
-  const rawHeaders = splitLine(lines[0]);
-  const headers = rawHeaders.map((h, i) => (h ? h.replace(/^["']|["']$/g, '') : `column_${i + 1}`));
-  const rows: string[][] = [];
-
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
-    const parts = splitLine(line).map((p) => p.replace(/^["']|["']$/g, ''));
-    if (parts.length < headers.length) {
-      while (parts.length < headers.length) parts.push('');
-    } else if (parts.length > headers.length) {
-      parts.length = headers.length;
+  // Push remaining field / row
+  if (currentField.length > 0 || inQuotes || currentRow.length > 0) {
+    currentRow.push(currentField);
+    if (currentRow.length > 1 || (currentRow.length === 1 && currentRow[0] !== '')) {
+      parsedRows.push(currentRow);
     }
-    rows.push(parts);
   }
 
-  return { headers, rows };
+  if (parsedRows.length === 0) {
+    return { headers: [], rows: [] };
+  }
+
+  const rawHeaders = parsedRows[0];
+  const headers = rawHeaders.map((h, i) => {
+    const trimmed = h.trim();
+    return trimmed ? trimmed : `column_${i + 1}`;
+  });
+
+  const rawData = parsedRows.slice(1);
+  const colCount = headers.length;
+  const normalizedRows: string[][] = [];
+
+  for (const r of rawData) {
+    if (r.length === 0 || (r.length === 1 && r[0].trim() === '')) {
+      continue;
+    }
+    const row = [...r];
+    if (row.length < colCount) {
+      while (row.length < colCount) row.push('');
+    } else if (row.length > colCount) {
+      row.length = colCount;
+    }
+    normalizedRows.push(row);
+  }
+
+  return { headers, rows: normalizedRows };
 }
 
 function calculateColumnStats(numbers: number[]): ColumnStats | null {
@@ -144,7 +247,7 @@ function calculateColumnStats(numbers: number[]): ColumnStats | null {
   };
 }
 
-export function localAnalyzeDataset(csvText: string): DatasetAnalysis {
+export function localAnalyzeDataset(csvText: string, _filename?: string): DatasetAnalysis {
   const { headers, rows } = parseCsv(csvText);
   const totalRows = rows.length;
   const totalCols = headers.length;
@@ -178,10 +281,10 @@ export function localAnalyzeDataset(csvText: string): DatasetAnalysis {
     };
   }
 
-  // Duplicate detection
+  // Duplicate detection using exact JSON serialization
   const rowHashCounts = new Map<string, number>();
   for (const r of rows) {
-    const key = r.join('||');
+    const key = JSON.stringify(r);
     rowHashCounts.set(key, (rowHashCounts.get(key) || 0) + 1);
   }
   let duplicate_rows = 0;
@@ -402,7 +505,7 @@ export function localApplyTransformations(
     const seen = new Set<string>();
     const deduped: string[][] = [];
     for (const r of curRows) {
-      const key = r.join('||');
+      const key = JSON.stringify(r);
       if (!seen.has(key)) {
         seen.add(key);
         deduped.push(r);
@@ -667,9 +770,9 @@ export function localApplyTransformations(
     applied.push(`Renamed ${renamedCount} column(s)`);
   }
 
-  // Generate cleaned CSV string
-  const cleanedCsv = [curHeaders.join(','), ...curRows.map((r) => r.join(','))].join('\n');
-  const newAnalysis = localAnalyzeDataset(cleanedCsv);
+  // Generate cleaned CSV string using safe RFC 4180 serializer
+  const cleanedCsv = serializeCsv(curHeaders, curRows);
+  const newAnalysis = localAnalyzeDataset(cleanedCsv, filename);
 
   const preview_rows = curRows.slice(0, 25).map((r, rIdx) => {
     const rowObj: Record<string, any> = { _row_id: rIdx + 1 };
@@ -703,15 +806,16 @@ export function localApplyTransformations(
 }
 
 export function generatePythonScript(ops: CleaningOperations, filename: string = 'dataset.csv'): string {
+  const cleanFilename = filename.startsWith('cleaned_') ? filename : `cleaned_${filename}`;
   const lines: string[] = [
     '# DataFix Generated Dataset Preparation Pipeline',
     '# Deterministic Data Preprocessing & Cleaning Script for Machine Learning',
     'import pandas as pd',
     'import numpy as np',
     '',
-    `# 1. Load Dataset`,
-    `df = pd.read_csv('${filename}')`,
-    `print(f'Initial shape: {df.shape}')`,
+    '# 1. Load Dataset',
+    `df = pd.read_csv(${JSON.stringify(filename)})`,
+    "print(f'Initial shape: {df.shape}')",
     '',
   ];
 
@@ -719,55 +823,90 @@ export function generatePythonScript(ops: CleaningOperations, filename: string =
     lines.push('# 2. Deduplication');
     lines.push('initial_rows = len(df)');
     lines.push('df = df.drop_duplicates()');
-    lines.push("print(f'Dropped {initial_rows - len(df)} duplicates')\n");
+    lines.push("print(f'Dropped {initial_rows - len(df)} duplicate row(s)')\n");
   }
 
-  if (ops.missing_actions.global === 'drop_rows') {
+  if (ops.missing_actions?.global === 'drop_rows') {
     lines.push('# 3. Drop rows with missing values');
-    lines.push('df = df.dropna()\n');
+    lines.push('initial_rows = len(df)');
+    lines.push('df = df.dropna()');
+    lines.push("print(f'Dropped {initial_rows - len(df)} row(s) containing missing values')\n");
   }
 
-  const colMiss = ops.missing_actions.columns || {};
+  const colMiss = ops.missing_actions?.columns || {};
   Object.entries(colMiss).forEach(([col, act]) => {
+    const colRepr = JSON.stringify(col);
     if (act.action === 'drop_rows') {
-      lines.push(`df = df.dropna(subset=['${col}'])`);
+      lines.push(`df = df.dropna(subset=[${colRepr}])`);
     } else if (act.action === 'mean') {
-      lines.push(`df['${col}'] = df['${col}'].fillna(df['${col}'].mean())`);
+      lines.push(`df[${colRepr}] = df[${colRepr}].fillna(df[${colRepr}].mean())`);
     } else if (act.action === 'median') {
-      lines.push(`df['${col}'] = df['${col}'].fillna(df['${col}'].median())`);
+      lines.push(`df[${colRepr}] = df[${colRepr}].fillna(df[${colRepr}].median())`);
     } else if (act.action === 'mode') {
-      lines.push(`df['${col}'] = df['${col}'].fillna(df['${col}'].mode()[0])`);
+      lines.push(`mode_val = df[${colRepr}].mode()[0] if not df[${colRepr}].mode().empty else np.nan`);
+      lines.push(`df[${colRepr}] = df[${colRepr}].fillna(mode_val)`);
     } else if (act.action === 'custom') {
-      lines.push(`df['${col}'] = df['${col}'].fillna('${act.value || ''}')`);
+      lines.push(`df[${colRepr}] = df[${colRepr}].fillna(${JSON.stringify(act.value || '')})`);
     }
   });
 
   const outlierActions = ops.outlier_actions || {};
   Object.entries(outlierActions).forEach(([col, act]) => {
     if (act === 'keep') return;
-    lines.push(`\n# Outlier remediation for ${col}`);
-    lines.push(`q1 = df['${col}'].quantile(0.25)`);
-    lines.push(`q3 = df['${col}'].quantile(0.75)`);
+    const colRepr = JSON.stringify(col);
+    lines.push(`\n# Outlier remediation for ${colRepr} (1.5x IQR)`);
+    lines.push(`q1 = df[${colRepr}].quantile(0.25)`);
+    lines.push(`q3 = df[${colRepr}].quantile(0.75)`);
     lines.push(`iqr = q3 - q1`);
     lines.push(`lower_bound = q1 - 1.5 * iqr`);
     lines.push(`upper_bound = q3 + 1.5 * iqr`);
     if (act === 'remove') {
-      lines.push(`df = df[(df['${col}'] >= lower_bound) & (df['${col}'] <= upper_bound)]`);
+      lines.push(`df = df[(df[${colRepr}] >= lower_bound) & (df[${colRepr}] <= upper_bound)]`);
     } else if (act === 'clip') {
-      lines.push(`df['${col}'] = df['${col}'].clip(lower=lower_bound, upper=upper_bound)`);
+      lines.push(`df[${colRepr}] = df[${colRepr}].clip(lower=lower_bound, upper=upper_bound)`);
+    }
+  });
+
+  const filterRules = ops.filter_rules || [];
+  filterRules.forEach((rule) => {
+    const col = rule.column;
+    const op = rule.operator;
+    const val = rule.value;
+    if (col && op && val !== undefined) {
+      const colRepr = JSON.stringify(col);
+      const numVal = tryParseNum(val);
+      if (numVal !== null && ['>', '<', '>=', '<=', '=='].includes(op)) {
+        lines.push(`df = df[pd.to_numeric(df[${colRepr}], errors='coerce') ${op} ${numVal}]`);
+      } else if (numVal !== null && op === '!=') {
+        lines.push(`df = df[pd.to_numeric(df[${colRepr}], errors='coerce') != ${numVal}]`);
+      } else if (op === '==') {
+        lines.push(`df = df[df[${colRepr}].astype(str).str.lower() == ${JSON.stringify(String(val).toLowerCase())}]`);
+      } else if (op === '!=') {
+        lines.push(`df = df[df[${colRepr}].astype(str).str.lower() != ${JSON.stringify(String(val).toLowerCase())}]`);
+      } else if (op === 'contains') {
+        lines.push(`df = df[df[${colRepr}].astype(str).str.contains(${JSON.stringify(String(val))}, case=False, na=False)]`);
+      }
     }
   });
 
   const typeConvs = ops.type_conversions || {};
   Object.entries(typeConvs).forEach(([col, dtype]) => {
+    const colRepr = JSON.stringify(col);
     if (dtype === 'integer') {
-      lines.push(`df['${col}'] = pd.to_numeric(df['${col}'], errors='coerce').round().astype('Int64')`);
+      lines.push(`df[${colRepr}] = pd.to_numeric(df[${colRepr}], errors='coerce').round().astype('Int64')`);
     } else if (dtype === 'float') {
-      lines.push(`df['${col}'] = pd.to_numeric(df['${col}'], errors='coerce')`);
+      lines.push(`df[${colRepr}] = pd.to_numeric(df[${colRepr}], errors='coerce')`);
     } else if (dtype === 'boolean') {
-      lines.push(`df['${col}'] = df['${col}'].astype(bool)`);
+      lines.push(`# Safe semantic boolean conversion for ${colRepr} (explicit dictionary mapping)`);
+      lines.push(`_bool_map = {'true': True, 't': True, 'yes': True, '1': True, '1.0': True, 'false': False, 'f': False, 'no': False, '0': False, '0.0': False}`);
+      lines.push(`_norm = df[${colRepr}].astype(str).str.strip().str.lower()`);
+      lines.push(`_mapped = _norm.map(_bool_map)`);
+      lines.push(`_invalid_cnt = (df[${colRepr}].notna() & _mapped.isna()).sum()`);
+      lines.push(`if _invalid_cnt > 0:`);
+      lines.push(`    print(f'Warning: {_invalid_cnt} invalid boolean value(s) in ${colRepr} coerced to NA')`);
+      lines.push(`df[${colRepr}] = _mapped.astype('boolean')`);
     } else if (dtype === 'string') {
-      lines.push(`df['${col}'] = df['${col}'].astype(str)`);
+      lines.push(`df[${colRepr}] = df[${colRepr}].astype(str)`);
     }
   });
 
@@ -782,9 +921,9 @@ export function generatePythonScript(ops: CleaningOperations, filename: string =
   }
 
   lines.push('\n# Final verification');
-  lines.push(`print(f'Final cleaned shape: {df.shape}')`);
-  lines.push(`df.to_csv('cleaned_${filename}', index=False)`);
-  lines.push(`print('Saved cleaned dataset to cleaned_${filename}')`);
+  lines.push("print(f'Final cleaned shape: {df.shape}')");
+  lines.push(`df.to_csv(${JSON.stringify(cleanFilename)}, index=False)`);
+  lines.push(`print(f'Saved cleaned dataset to ${cleanFilename}')`);
 
   return lines.join('\n');
 }

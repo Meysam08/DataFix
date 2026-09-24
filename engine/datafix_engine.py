@@ -93,17 +93,49 @@ def infer_column_type(values):
     return 'string'
 
 def parse_csv_stream(csv_content):
-    # Detect delimiter
+    if not csv_content:
+        return [], []
+
+    # Strip UTF-8 BOM if present
+    if csv_content.startswith('\ufeff'):
+        csv_content = csv_content[1:]
+
+    # Detect delimiter by counting unquoted occurrences
     sample = csv_content[:4096]
+    comma_count = 0
+    semi_count = 0
+    tab_count = 0
+    in_quote = False
+    for i, c in enumerate(sample):
+        if c == '"':
+            if in_quote and i + 1 < len(sample) and sample[i+1] == '"':
+                continue
+            in_quote = not in_quote
+        elif not in_quote:
+            if c == ',': comma_count += 1
+            elif c == ';': semi_count += 1
+            elif c == '\t': tab_count += 1
+            elif c == '\n':
+                if comma_count > 0 or semi_count > 0 or tab_count > 0:
+                    break
+
     delimiter = ','
-    if sample.count(';') > sample.count(',') and sample.count(';') > sample.count('\t'):
+    if semi_count > comma_count and semi_count > tab_count:
         delimiter = ';'
-    elif sample.count('\t') > sample.count(','):
+    elif tab_count > comma_count and tab_count > semi_count:
         delimiter = '\t'
 
     f = io.StringIO(csv_content.strip())
     reader = csv.reader(f, delimiter=delimiter)
-    rows = list(reader)
+    try:
+        rows = list(reader)
+    except Exception:
+        # Fallback if unclosed quote at end
+        f.seek(0)
+        rows = []
+        for line in f:
+            rows.append(line.rstrip('\r\n').split(delimiter))
+
     if not rows:
         return [], []
     headers = [h.strip() if h.strip() else f"column_{i+1}" for i, h in enumerate(rows[0])]
@@ -614,27 +646,36 @@ def apply_transformations(headers, data, operations):
         'diff_samples': diff_samples
     }
 
+def format_csv_field(val):
+    if val is None:
+        return ''
+    s = str(val)
+    if any(c in s for c in (',', '"', '\n', '\r', ';', '\t')) or (s and (s[0].isspace() or s[-1].isspace())):
+        return '"' + s.replace('"', '""') + '"'
+    return s
+
 def export_csv_string(headers, data):
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(headers)
+    lines = [','.join(format_csv_field(h) for h in headers)]
     for r in data:
-        writer.writerow(r)
-    return output.getvalue()
+        lines.append(','.join(format_csv_field(cell) for cell in r))
+    return '\n'.join(lines)
 
 def generate_python_repro_code(operations, filename="dataset.csv"):
     """
     Generates reproducible pandas cleaning code for ML practitioners.
+    Safely escapes column names, filenames, and replacement values.
+    Uses semantic boolean conversion instead of raw astype(bool).
     """
+    clean_filename = "cleaned_" + filename if not filename.startswith("cleaned_") else filename
     lines = [
         "# DataFix Generated Preparation Pipeline",
         "# Deterministic ML Preprocessing Script",
         "import pandas as pd",
         "import numpy as np",
         "",
-        f"# 1. Load Dataset",
-        f"df = pd.read_csv('{filename}')",
-        f"print(f'Initial shape: {{df.shape}}')",
+        "# 1. Load Dataset",
+        f"df = pd.read_csv({json.dumps(filename)})",
+        "print(f'Initial shape: {df.shape}')",
         ""
     ]
 
@@ -642,56 +683,90 @@ def generate_python_repro_code(operations, filename="dataset.csv"):
         lines.append("# 2. Remove duplicate rows")
         lines.append("initial_rows = len(df)")
         lines.append("df = df.drop_duplicates()")
-        lines.append("print(f'Dropped {initial_rows - len(df)} duplicates')\n")
+        lines.append("print(f'Dropped {initial_rows - len(df)} duplicate row(s)')\n")
 
     missing = operations.get('missing_actions', {})
     if missing.get('global') == 'drop_rows':
         lines.append("# 3. Drop rows with any missing values")
-        lines.append("df = df.dropna()\n")
+        lines.append("initial_rows = len(df)")
+        lines.append("df = df.dropna()")
+        lines.append("print(f'Dropped {initial_rows - len(df)} row(s) containing missing values')\n")
     
     col_missing = missing.get('columns', {})
     for col, act in col_missing.items():
         a = act.get('action')
+        col_repr = json.dumps(col)
         if a == 'drop_rows':
-            lines.append(f"df = df.dropna(subset=['{col}'])")
+            lines.append(f"df = df.dropna(subset=[{col_repr}])")
         elif a == 'mean':
-            lines.append(f"df['{col}'] = df['{col}'].fillna(df['{col}'].mean())")
+            lines.append(f"df[{col_repr}] = df[{col_repr}].fillna(df[{col_repr}].mean())")
         elif a == 'median':
-            lines.append(f"df['{col}'] = df['{col}'].fillna(df['{col}'].median())")
+            lines.append(f"df[{col_repr}] = df[{col_repr}].fillna(df[{col_repr}].median())")
         elif a == 'mode':
-            lines.append(f"df['{col}'] = df['{col}'].fillna(df['{col}'].mode()[0])")
+            lines.append(f"mode_val = df[{col_repr}].mode()[0] if not df[{col_repr}].mode().empty else np.nan")
+            lines.append(f"df[{col_repr}] = df[{col_repr}].fillna(mode_val)")
         elif a == 'custom':
             val = act.get('value', '')
-            lines.append(f"df['{col}'] = df['{col}'].fillna('{val}')")
+            lines.append(f"df[{col_repr}] = df[{col_repr}].fillna({json.dumps(val)})")
 
     outlier_actions = operations.get('outlier_actions', {})
     for col, act in outlier_actions.items():
-        lines.append(f"\n# Outlier handling for {col}")
-        lines.append(f"q1 = df['{col}'].quantile(0.25)")
-        lines.append(f"q3 = df['{col}'].quantile(0.75)")
-        lines.append(f"iqr = q3 - q1")
-        lines.append(f"lower_bound = q1 - 1.5 * iqr")
-        lines.append(f"upper_bound = q3 + 1.5 * iqr")
+        if act == 'keep':
+            continue
+        col_repr = json.dumps(col)
+        lines.append(f"\n# Outlier handling for {col_repr} (1.5x IQR)")
+        lines.append(f"q1 = df[{col_repr}].quantile(0.25)")
+        lines.append(f"q3 = df[{col_repr}].quantile(0.75)")
+        lines.append("iqr = q3 - q1")
+        lines.append("lower_bound = q1 - 1.5 * iqr")
+        lines.append("upper_bound = q3 + 1.5 * iqr")
         if act == 'remove':
-            lines.append(f"df = df[(df['{col}'] >= lower_bound) & (df['{col}'] <= upper_bound)]")
+            lines.append(f"df = df[(df[{col_repr}] >= lower_bound) & (df[{col_repr}] <= upper_bound)]")
         elif act == 'clip':
-            lines.append(f"df['{col}'] = df['{col}'].clip(lower=lower_bound, upper=upper_bound)")
+            lines.append(f"df[{col_repr}] = df[{col_repr}].clip(lower=lower_bound, upper=upper_bound)")
+
+    filter_rules = operations.get('filter_rules', [])
+    for rule in filter_rules:
+        col = rule.get('column')
+        op = rule.get('operator')
+        val = rule.get('value')
+        if col and op and val is not None:
+            col_repr = json.dumps(col)
+            num_val = try_parse_numeric(val)
+            if num_val is not None and op in ('>', '<', '>=', '<=', '=='):
+                lines.append(f"df = df[pd.to_numeric(df[{col_repr}], errors='coerce') {op} {num_val}]")
+            elif num_val is not None and op == '!=':
+                lines.append(f"df = df[pd.to_numeric(df[{col_repr}], errors='coerce') != {num_val}]")
+            elif op == '==':
+                lines.append(f"df = df[df[{col_repr}].astype(str).str.lower() == {json.dumps(str(val).lower())}]")
+            elif op == '!=':
+                lines.append(f"df = df[df[{col_repr}].astype(str).str.lower() != {json.dumps(str(val).lower())}]")
+            elif op == 'contains':
+                lines.append(f"df = df[df[{col_repr}].astype(str).str.contains({json.dumps(str(val))}, case=False, na=False)]")
 
     type_conversions = operations.get('type_conversions', {})
     for col, dtype in type_conversions.items():
+        col_repr = json.dumps(col)
         if dtype == 'integer':
-            lines.append(f"df['{col}'] = pd.to_numeric(df['{col}'], errors='coerce').round().astype('Int64')")
+            lines.append(f"df[{col_repr}] = pd.to_numeric(df[{col_repr}], errors='coerce').round().astype('Int64')")
         elif dtype == 'float':
-            lines.append(f"df['{col}'] = pd.to_numeric(df['{col}'], errors='coerce')")
+            lines.append(f"df[{col_repr}] = pd.to_numeric(df[{col_repr}], errors='coerce')")
         elif dtype == 'string':
-            lines.append(f"df['{col}'] = df['{col}'].astype(str)")
+            lines.append(f"df[{col_repr}] = df[{col_repr}].astype(str)")
         elif dtype == 'boolean':
-            lines.append(f"df['{col}'] = df['{col}'].astype(bool)")
+            lines.append(f"# Safe semantic boolean conversion for {col_repr} (explicit mapping, never naive astype(bool))")
+            lines.append(f"_bool_map = {{'true': True, 't': True, 'yes': True, '1': True, '1.0': True, 'false': False, 'f': False, 'no': False, '0': False, '0.0': False}}")
+            lines.append(f"_norm = df[{col_repr}].astype(str).str.strip().str.lower()")
+            lines.append(f"_mapped = _norm.map(_bool_map)")
+            lines.append(f"_invalid_cnt = (df[{col_repr}].notna() & _mapped.isna()).sum()")
+            lines.append(f"if _invalid_cnt > 0:")
+            lines.append(f"    print(f'Warning: {{_invalid_cnt}} invalid boolean value(s) in {col_repr} coerced to NA')")
+            lines.append(f"df[{col_repr}] = _mapped.astype('boolean')")
 
     drop_cols = operations.get('drop_columns', [])
     if drop_cols:
         lines.append(f"\n# Drop unneeded columns")
-        lines.append(f"df = df.drop(columns={drop_cols}, errors='ignore')")
+        lines.append(f"df = df.drop(columns={json.dumps(drop_cols)}, errors='ignore')")
 
     rename_cols = operations.get('rename_columns', {})
     if rename_cols:
@@ -700,8 +775,8 @@ def generate_python_repro_code(operations, filename="dataset.csv"):
 
     lines.append("\n# Final output")
     lines.append("print(f'Final cleaned shape: {df.shape}')")
-    lines.append("df.to_csv('cleaned_dataset.csv', index=False)")
-    lines.append("print('Saved cleaned dataset to cleaned_dataset.csv')")
+    lines.append(f"df.to_csv({json.dumps(clean_filename)}, index=False)")
+    lines.append(f"print(f'Saved cleaned dataset to {clean_filename}')")
 
     return "\n".join(lines)
 
@@ -712,7 +787,7 @@ def main():
             print(json.dumps({'error': 'No input provided'}))
             sys.exit(1)
         
-        payload = json.loads(raw_input)
+        payload = json.loads(raw_input, strict=False)
         command = payload.get('command', 'analyze')
         csv_content = payload.get('csv_content', '')
 

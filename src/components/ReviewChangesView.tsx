@@ -136,9 +136,13 @@ export const ReviewChangesView: React.FC<ReviewChangesViewProps> = ({
             </span>
           </div>
           <div className="text-[11px] text-neutral-400">
-            {isRTL
-              ? 'کسری امتیاز مربوط به مقادیر خالی و سطرهای تکراری برطرف شد'
-              : 'Deductions for missing values and duplicates eliminated'}
+            {transformResult.new_analysis?.missing_values === 0 && transformResult.new_analysis?.duplicate_rows === 0
+              ? isRTL
+                ? 'کسری امتیاز مربوط به مقادیر خالی و سطرهای تکراری برطرف شد'
+                : 'Deductions for missing values and duplicates eliminated'
+              : isRTL
+              ? `ارزیابی با مدل هیوریستیک دیتافیکس (${transformResult.new_analysis?.missing_values || 0} خانه خالی، ${transformResult.new_analysis?.duplicate_rows || 0} سطر تکراری)`
+              : `Evaluated via DataFix heuristic (${transformResult.new_analysis?.missing_values || 0} missing, ${transformResult.new_analysis?.duplicate_rows || 0} duplicates)`}
           </div>
         </div>
 
