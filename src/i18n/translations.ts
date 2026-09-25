@@ -152,6 +152,24 @@ export const translations: Record<Language, Record<TranslationKey, string>> = {
     applyAllRecommendationsBtn: 'Apply All Best-Practice Recommendations',
     appliedBadge: 'Added to Pipeline',
     whyTitle: 'Why this is recommended for ML:',
+    // CSV Structure Validation & Scope
+    csvStructureValid: 'Valid CSV Structure',
+    csvStructureWarningTitle: 'Inconsistent CSV Field Count',
+    csvStructureWarningDesc:
+      '{count} rows contain an inconsistent number of fields. These rows require inspection before reliable analysis.',
+    csvStructureExpectedCols: 'Expected columns',
+    csvStructureActualCols: 'Actual fields',
+    csvStructureRowNumber: 'Row Number',
+    csvStructureRawFields: 'Raw Fields',
+    csvStructureInspectBtn: 'Inspect Malformed Rows',
+    csvStructureHideBtn: 'Hide Malformed Rows',
+    csvStructureAllValidDesc: 'All rows match the header column count ({count} columns).',
+    heuristicScopeTitle: 'DataFix Hygiene Scope & Statistical Bounds',
+    heuristicScopeDesc:
+      'The DataFix Score strictly measures dataset hygiene (missing rates, duplicates, empty columns, type consistency, and IQR outlier density). It is NOT an assessment of model suitability, target leakage, class balance, or statistical validity.',
+    outlierSemanticsTitle: 'Outlier Semantics & 1.5× IQR Detection',
+    outlierSemanticsDesc:
+      'Statistical outliers identified by the 1.5× IQR rule represent observations in extreme distribution tails. They are not necessarily invalid entries or errors, but require inspection to discern legitimate extremes from data flaws.',
     // Cleaning
     workspaceTitle: 'Dataset Cleaning Workspace',
     workspaceSubtitle:
@@ -382,6 +400,24 @@ export const translations: Record<Language, Record<TranslationKey, string>> = {
     applyAllRecommendationsBtn: 'اعمال همه توصیه‌ها به صورت خودکار',
     appliedBadge: 'اضافه شد به صف',
     whyTitle: 'چرا این اقدام برای یادگیری ماشین توصیه می‌شود:',
+    // CSV Structure Validation & Scope
+    csvStructureValid: 'ساختار فایل CSV معتبر است',
+    csvStructureWarningTitle: 'تعداد فیلدهای ناسازگار در سطرهای CSV',
+    csvStructureWarningDesc:
+      '{count} سطر دارای تعداد فیلد ناسازگار هستند. این سطرها باید قبل از تحلیل قابل اعتماد بررسی شوند.',
+    csvStructureExpectedCols: 'تعداد ستون‌های مورد انتظار',
+    csvStructureActualCols: 'تعداد فیلدهای موجود',
+    csvStructureRowNumber: 'شماره سطر',
+    csvStructureRawFields: 'محتوای فیلدهای خام',
+    csvStructureInspectBtn: 'مشاهده سطرهای دارای ناسازگاری',
+    csvStructureHideBtn: 'بستن لیست سطرهای ناسازگار',
+    csvStructureAllValidDesc: 'تمامی سطرها دقیقاً با تعداد ستون‌های تعریف‌شده ({count} ستون) همخوانی دارند.',
+    heuristicScopeTitle: 'محدوده بهداشت داده و مرزهای آماری دیتافیکس',
+    heuristicScopeDesc:
+      'امتیاز کیفیت دیتافیکس صرفاً معیاری برای بهداشت فنی دیتاست (نرخ مقادیر خالی، ردیف‌های تکراری، ستون‌های تهی، یکپارچگی نوع داده و تراکم داده‌های پرت آماری) است و بیانگر مناسبت مدل، نشت هدف، تعادل کلاس‌ها یا اعتبار آماری نیست.',
+    outlierSemanticsTitle: 'مفهوم داده‌های پرت آماری و تشخیص با قاعده ۱.۵× IQR',
+    outlierSemanticsDesc:
+      'داده‌های پرت شناسایی‌شده با قاعده استاندارد ۱.۵×IQR صرفاً مقادیر واقع در دُم‌های توزیع آماری هستند. این مقادیر لزوماً داده‌های فاسد یا خطا نیستند، بلکه نیازمند بررسی انسانی برای تمایز میان مقادیر واقعی شدید و خطاهای ورود داده می‌باشند.',
     // Cleaning
     workspaceTitle: 'میز کار پاک‌سازی و پیش‌پردازش',
     workspaceSubtitle:

@@ -6,18 +6,33 @@ import {
   CleaningOperations,
   TransformPreviewResult,
   DetectedIssue,
-  DiffSample
+  DiffSample,
+  CsvStructure,
+  MalformedRowDetail
 } from '../types/dataset';
+
+const EMPTY_VALUES = new Set([
+  '', 'null', 'nan', 'none', 'na', 'n/a', '?', 'nil', '#n/a', '-', 'undefined',
+  'سفید', 'خالی', 'ندارد', 'نامشخص'
+]);
 
 export function isEmptyVal(val: any): boolean {
   if (val === null || val === undefined) return true;
   const s = String(val).trim().toLowerCase();
-  return ['', 'null', 'nan', 'none', 'na', 'n/a', '?', 'nil', '#n/a'].includes(s);
+  return EMPTY_VALUES.has(s);
+}
+
+export function normalizePersianArabicDigits(val: string): string {
+  return val
+    .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/٫/g, '.')
+    .replace(/٬/g, ',');
 }
 
 export function tryParseNum(val: any): number | null {
   if (isEmptyVal(val)) return null;
-  const s = String(val).trim().replace(/,/g, '');
+  const s = normalizePersianArabicDigits(String(val)).trim().replace(/,/g, '');
   if (!/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(s)) {
     return null;
   }
@@ -28,8 +43,8 @@ export function tryParseNum(val: any): number | null {
 export function isBool(val: any): boolean | null {
   if (isEmptyVal(val)) return null;
   const s = String(val).trim().toLowerCase();
-  if (['true', 't', 'yes', '1'].includes(s)) return true;
-  if (['false', 'f', 'no', '0'].includes(s)) return false;
+  if (['true', 't', 'yes', 'y', '1', '1.0', 'بله', 'صحیح', 'درست'].includes(s)) return true;
+  if (['false', 'f', 'no', 'n', '0', '0.0', 'خیر', 'غلط', 'نادرست', 'نه'].includes(s)) return false;
   return null;
 }
 
@@ -41,11 +56,11 @@ export function isDateStr(val: any): boolean {
   if (
     !/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/.test(s) &&
     !/^\d{1,2}[-/.]\d{1,2}[-/.]\d{4}/.test(s) &&
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s)
+    !/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(s)
   ) {
     return false;
   }
-  const d = Date.parse(s);
+  const d = Date.parse(s.replace(/[/.]/g, '-'));
   return !isNaN(d);
 }
 
@@ -59,6 +74,7 @@ export function formatCsvField(val: any): string {
     s.includes('\r') ||
     s.includes(';') ||
     s.includes('\t') ||
+    s.includes('|') ||
     /^\s|\s$/.test(s)
   ) {
     return `"${s.replace(/"/g, '""')}"`;
@@ -72,8 +88,27 @@ export function serializeCsv(headers: string[], rows: any[][]): string {
   return [headerLine, ...rowLines].join('\n');
 }
 
-export function parseCsv(csvText: string): { headers: string[]; rows: string[][] } {
-  if (!csvText || !csvText.trim()) return { headers: [], rows: [] };
+export interface ParseCsvResult {
+  headers: string[];
+  rows: string[][];
+  structure: CsvStructure;
+  rawRows: string[][];
+}
+
+export function parseCsv(csvText: string): ParseCsvResult {
+  const emptyResult: ParseCsvResult = {
+    headers: [],
+    rows: [],
+    structure: {
+      valid: true,
+      expected_columns: 0,
+      malformed_rows: 0,
+      malformed_row_details: [],
+    },
+    rawRows: [],
+  };
+
+  if (!csvText || !csvText.trim()) return emptyResult;
 
   // Strip UTF-8 BOM if present
   let cleanText = csvText;
@@ -86,6 +121,7 @@ export function parseCsv(csvText: string): { headers: string[]; rows: string[][]
   let commaCount = 0;
   let semiCount = 0;
   let tabCount = 0;
+  let pipeCount = 0;
   let inQ = false;
   for (let i = 0; i < sample.length; i++) {
     const c = sample[i];
@@ -99,15 +135,24 @@ export function parseCsv(csvText: string): { headers: string[]; rows: string[][]
       if (c === ',') commaCount++;
       else if (c === ';') semiCount++;
       else if (c === '\t') tabCount++;
+      else if (c === '|') pipeCount++;
       else if (c === '\n') {
-        if (commaCount > 0 || semiCount > 0 || tabCount > 0) break;
+        if (commaCount > 0 || semiCount > 0 || tabCount > 0 || pipeCount > 0) break;
       }
     }
   }
 
   let delimiter = ',';
-  if (semiCount > commaCount && semiCount > tabCount) delimiter = ';';
-  else if (tabCount > commaCount && tabCount > semiCount) delimiter = '\t';
+  const counts = [
+    { delim: ';', count: semiCount },
+    { delim: '\t', count: tabCount },
+    { delim: '|', count: pipeCount },
+    { delim: ',', count: commaCount },
+  ];
+  counts.sort((a, b) => b.count - a.count);
+  if (counts[0].count > 0 && counts[0].delim !== ',') {
+    delimiter = counts[0].delim;
+  }
 
   // Full RFC 4180 streaming state-machine parser
   const parsedRows: string[][] = [];
@@ -169,7 +214,7 @@ export function parseCsv(csvText: string): { headers: string[]; rows: string[][]
   }
 
   if (parsedRows.length === 0) {
-    return { headers: [], rows: [] };
+    return emptyResult;
   }
 
   const rawHeaders = parsedRows[0];
@@ -181,21 +226,42 @@ export function parseCsv(csvText: string): { headers: string[]; rows: string[][]
   const rawData = parsedRows.slice(1);
   const colCount = headers.length;
   const normalizedRows: string[][] = [];
+  const malformedDetails: MalformedRowDetail[] = [];
 
-  for (const r of rawData) {
+  for (let rIdx = 0; rIdx < rawData.length; rIdx++) {
+    const r = rawData[rIdx];
     if (r.length === 0 || (r.length === 1 && r[0].trim() === '')) {
       continue;
     }
+    const rowNumber = rIdx + 2; // 1-based, line 1 is header
+    if (r.length !== colCount) {
+      malformedDetails.push({
+        row_number: rowNumber,
+        expected_columns: colCount,
+        actual_columns: r.length,
+        raw_fields: [...r],
+      });
+    }
+
     const row = [...r];
     if (row.length < colCount) {
       while (row.length < colCount) row.push('');
     } else if (row.length > colCount) {
+      // Keep row length aligned to colCount for standard columnar index access,
+      // while safely preserving the full raw row in malformedDetails and rawRows.
       row.length = colCount;
     }
     normalizedRows.push(row);
   }
 
-  return { headers, rows: normalizedRows };
+  const structure: CsvStructure = {
+    valid: malformedDetails.length === 0,
+    expected_columns: colCount,
+    malformed_rows: malformedDetails.length,
+    malformed_row_details: malformedDetails,
+  };
+
+  return { headers, rows: normalizedRows, structure, rawRows: rawData };
 }
 
 function calculateColumnStats(numbers: number[]): ColumnStats | null {
@@ -248,7 +314,7 @@ function calculateColumnStats(numbers: number[]): ColumnStats | null {
 }
 
 export function localAnalyzeDataset(csvText: string, _filename?: string): DatasetAnalysis {
-  const { headers, rows } = parseCsv(csvText);
+  const { headers, rows, structure } = parseCsv(csvText);
   const totalRows = rows.length;
   const totalCols = headers.length;
 
@@ -278,6 +344,7 @@ export function localAnalyzeDataset(csvText: string, _filename?: string): Datase
         },
       ],
       preview_rows: [],
+      csv_structure: structure,
     };
   }
 
@@ -297,6 +364,16 @@ export function localAnalyzeDataset(csvText: string, _filename?: string): Datase
   let totalMissingCells = 0;
   const columns: ColumnDetail[] = [];
   const detected_issues: DetectedIssue[] = [];
+
+  // Check CSV structural integrity
+  if (structure && structure.malformed_rows > 0) {
+    detected_issues.push({
+      severity: 'high',
+      title: 'Inconsistent CSV Field Count',
+      description: `${structure.malformed_rows} row(s) contain an inconsistent number of fields (expected ${totalCols}). These rows require inspection before reliable analysis.`,
+      recommendation: 'Inspect malformed rows to verify delimiters, unescaped quotes, or line breaks in source data.',
+    });
+  }
 
   for (let cIdx = 0; cIdx < totalCols; cIdx++) {
     const colName = headers[cIdx];
@@ -461,8 +538,12 @@ export function localAnalyzeDataset(csvText: string, _filename?: string): Datase
   const preview_rows = rows.slice(0, 25).map((r, rIdx) => {
     const rowObj: Record<string, any> = { _row_id: rIdx + 1 };
     headers.forEach((h, cIdx) => {
-      rowObj[h] = r[cIdx];
+      rowObj[h] = r[cIdx] ?? '';
     });
+    const malformed = structure.malformed_row_details.find((m) => m.row_number === rIdx + 2);
+    if (malformed && malformed.actual_columns > totalCols && malformed.raw_fields) {
+      rowObj['_extra_fields'] = malformed.raw_fields.slice(totalCols);
+    }
     return rowObj;
   });
 
@@ -484,6 +565,7 @@ export function localAnalyzeDataset(csvText: string, _filename?: string): Datase
     },
     detected_issues,
     preview_rows,
+    csv_structure: structure,
   };
 }
 
@@ -880,11 +962,11 @@ export function generatePythonScript(ops: CleaningOperations, filename: string =
       } else if (numVal !== null && op === '!=') {
         lines.push(`df = df[pd.to_numeric(df[${colRepr}], errors='coerce') != ${numVal}]`);
       } else if (op === '==') {
-        lines.push(`df = df[df[${colRepr}].astype(str).str.lower() == ${JSON.stringify(String(val).toLowerCase())}]`);
+        lines.push(`df = df[df[${colRepr}].astype('string').str.lower() == ${JSON.stringify(String(val).toLowerCase())}]`);
       } else if (op === '!=') {
-        lines.push(`df = df[df[${colRepr}].astype(str).str.lower() != ${JSON.stringify(String(val).toLowerCase())}]`);
+        lines.push(`df = df[df[${colRepr}].astype('string').str.lower() != ${JSON.stringify(String(val).toLowerCase())}]`);
       } else if (op === 'contains') {
-        lines.push(`df = df[df[${colRepr}].astype(str).str.contains(${JSON.stringify(String(val))}, case=False, na=False)]`);
+        lines.push(`df = df[df[${colRepr}].astype('string').str.contains(${JSON.stringify(String(val))}, case=False, na=False)]`);
       }
     }
   });
@@ -898,15 +980,15 @@ export function generatePythonScript(ops: CleaningOperations, filename: string =
       lines.push(`df[${colRepr}] = pd.to_numeric(df[${colRepr}], errors='coerce')`);
     } else if (dtype === 'boolean') {
       lines.push(`# Safe semantic boolean conversion for ${colRepr} (explicit dictionary mapping)`);
-      lines.push(`_bool_map = {'true': True, 't': True, 'yes': True, '1': True, '1.0': True, 'false': False, 'f': False, 'no': False, '0': False, '0.0': False}`);
-      lines.push(`_norm = df[${colRepr}].astype(str).str.strip().str.lower()`);
+      lines.push(`_bool_map = {'true': True, 't': True, 'yes': True, '1': True, '1.0': True, 'بله': True, 'صحیح': True, 'درست': True, 'false': False, 'f': False, 'no': False, '0': False, '0.0': False, 'خیر': False, 'غلط': False, 'نادرست': False, 'نه': False}`);
+      lines.push(`_norm = df[${colRepr}].astype('string').str.strip().str.lower()`);
       lines.push(`_mapped = _norm.map(_bool_map)`);
       lines.push(`_invalid_cnt = (df[${colRepr}].notna() & _mapped.isna()).sum()`);
       lines.push(`if _invalid_cnt > 0:`);
       lines.push(`    print(f'Warning: {_invalid_cnt} invalid boolean value(s) in ${colRepr} coerced to NA')`);
       lines.push(`df[${colRepr}] = _mapped.astype('boolean')`);
     } else if (dtype === 'string') {
-      lines.push(`df[${colRepr}] = df[${colRepr}].astype(str)`);
+      lines.push(`df[${colRepr}] = df[${colRepr}].astype('string')`);
     }
   });
 

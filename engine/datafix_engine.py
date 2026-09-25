@@ -14,16 +14,33 @@ import re
 from datetime import datetime
 from collections import Counter
 
+EMPTY_VALUES = {
+    '', 'null', 'nan', 'none', 'na', 'n/a', '?', 'nil', '#n/a', '-', 'undefined',
+    'سفید', 'خالی', 'ندارد', 'نامشخص'
+}
+
 def is_empty_value(val):
     if val is None:
         return True
     s = str(val).strip().lower()
-    return s in ('', 'null', 'nan', 'none', 'na', 'n/a', '?', 'nil', '#n/a')
+    return s in EMPTY_VALUES
+
+def normalize_persian_arabic_digits(val):
+    if not isinstance(val, str):
+        val = str(val)
+    trans = str.maketrans({
+        '۰': '0', '۱': '1', '۲': '2', '۳': '3', '۴': '4',
+        '۵': '5', '۶': '6', '۷': '7', '۸': '8', '۹': '9',
+        '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
+        '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
+        '٫': '.', '٬': ','
+    })
+    return val.translate(trans)
 
 def try_parse_numeric(val):
     if is_empty_value(val):
         return None
-    s = str(val).strip().replace(',', '')
+    s = normalize_persian_arabic_digits(str(val)).strip().replace(',', '')
     try:
         if '.' in s or 'e' in s.lower():
             return float(s)
@@ -39,7 +56,8 @@ def try_parse_date(val):
         return None
     date_formats = [
         "%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%d/%m/%Y",
-        "%m-%d-%Y", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"
+        "%m-%d-%Y", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S", "%Y.%m.%d"
     ]
     for fmt in date_formats:
         try:
@@ -52,8 +70,12 @@ def is_boolean(val):
     if is_empty_value(val):
         return None
     s = str(val).strip().lower()
-    if s in ('true', 'false', 't', 'f', 'yes', 'no', '1', '0'):
-        return s in ('true', 't', 'yes', '1')
+    true_set = {'true', 't', 'yes', 'y', '1', '1.0', 'بله', 'صحیح', 'درست'}
+    false_set = {'false', 'f', 'no', 'n', '0', '0.0', 'خیر', 'غلط', 'نادرست', 'نه'}
+    if s in true_set:
+        return True
+    if s in false_set:
+        return False
     return None
 
 def infer_column_type(values):
@@ -94,7 +116,13 @@ def infer_column_type(values):
 
 def parse_csv_stream(csv_content):
     if not csv_content:
-        return [], []
+        empty_structure = {
+            'valid': True,
+            'expected_columns': 0,
+            'malformed_rows': 0,
+            'malformed_row_details': []
+        }
+        return [], [], empty_structure
 
     # Strip UTF-8 BOM if present
     if csv_content.startswith('\ufeff'):
@@ -105,6 +133,7 @@ def parse_csv_stream(csv_content):
     comma_count = 0
     semi_count = 0
     tab_count = 0
+    pipe_count = 0
     in_quote = False
     for i, c in enumerate(sample):
         if c == '"':
@@ -115,15 +144,16 @@ def parse_csv_stream(csv_content):
             if c == ',': comma_count += 1
             elif c == ';': semi_count += 1
             elif c == '\t': tab_count += 1
+            elif c == '|': pipe_count += 1
             elif c == '\n':
-                if comma_count > 0 or semi_count > 0 or tab_count > 0:
+                if comma_count > 0 or semi_count > 0 or tab_count > 0 or pipe_count > 0:
                     break
 
     delimiter = ','
-    if semi_count > comma_count and semi_count > tab_count:
-        delimiter = ';'
-    elif tab_count > comma_count and tab_count > semi_count:
-        delimiter = '\t'
+    counts = [(';', semi_count), ('\t', tab_count), ('|', pipe_count), (',', comma_count)]
+    counts.sort(key=lambda x: x[1], reverse=True)
+    if counts[0][1] > 0 and counts[0][0] != ',':
+        delimiter = counts[0][0]
 
     f = io.StringIO(csv_content.strip())
     reader = csv.reader(f, delimiter=delimiter)
@@ -137,21 +167,51 @@ def parse_csv_stream(csv_content):
             rows.append(line.rstrip('\r\n').split(delimiter))
 
     if not rows:
-        return [], []
+        empty_structure = {
+            'valid': True,
+            'expected_columns': 0,
+            'malformed_rows': 0,
+            'malformed_row_details': []
+        }
+        return [], [], empty_structure
+
     headers = [h.strip() if h.strip() else f"column_{i+1}" for i, h in enumerate(rows[0])]
     data = rows[1:]
-    # Normalize row lengths
+
+    # Validate structural consistency and normalize row lengths
     col_count = len(headers)
     normalized_data = []
-    for r in data:
+    malformed_details = []
+
+    for r_idx, r in enumerate(data):
         if not any(r):
             continue
-        if len(r) < col_count:
-            r = r + [''] * (col_count - len(r))
-        elif len(r) > col_count:
-            r = r[:col_count]
-        normalized_data.append(r)
-    return headers, normalized_data
+        row_number = r_idx + 2  # 1-based, line 1 is header
+        actual_cols = len(r)
+        if actual_cols != col_count:
+            malformed_details.append({
+                'row_number': row_number,
+                'expected_columns': col_count,
+                'actual_columns': actual_cols,
+                'raw_fields': list(r)
+            })
+
+        row = list(r)
+        if actual_cols < col_count:
+            row = row + [''] * (col_count - actual_cols)
+        elif actual_cols > col_count:
+            # Safely preserved in malformed_details['raw_fields']
+            row = row[:col_count]
+        normalized_data.append(row)
+
+    structure = {
+        'valid': len(malformed_details) == 0,
+        'expected_columns': col_count,
+        'malformed_rows': len(malformed_details),
+        'malformed_row_details': malformed_details
+    }
+
+    return headers, normalized_data, structure
 
 def calculate_stats(numbers):
     if not numbers:
@@ -199,7 +259,7 @@ def calculate_stats(numbers):
         'sample_outliers': [round(x, 4) for x in outliers[:5]]
     }
 
-def analyze_dataset(headers, data):
+def analyze_dataset(headers, data, structure=None):
     total_rows = len(data)
     total_cols = len(headers)
     
@@ -213,8 +273,21 @@ def analyze_dataset(headers, data):
             'duplicate_rows': 0,
             'duplicate_pct': 0,
             'quality_score': 0,
-            'detected_issues': [{'severity': 'high', 'title': 'Empty Dataset', 'description': 'The provided CSV file contains no data rows.'}],
-            'preview_rows': []
+            'score_breakdown': {
+                'missing_penalty': 0.0,
+                'duplicate_penalty': 0.0,
+                'empty_col_penalty': 0.0,
+                'type_penalty': 0.0,
+                'outlier_penalty': 0.0
+            },
+            'detected_issues': [{'severity': 'high', 'title': 'Empty Dataset', 'description': 'The provided CSV file contains no data rows.', 'recommendation': 'Upload a CSV with headers and data rows.'}],
+            'preview_rows': [],
+            'csv_structure': structure or {
+                'valid': True,
+                'expected_columns': 0,
+                'malformed_rows': 0,
+                'malformed_row_details': []
+            }
         }
 
     # Duplicate rows detection
@@ -227,6 +300,16 @@ def analyze_dataset(headers, data):
     total_missing_cells = 0
     column_analysis = []
     detected_issues = []
+
+    # Check CSV structure integrity
+    if structure and structure.get('malformed_rows', 0) > 0:
+        m_count = structure['malformed_rows']
+        detected_issues.append({
+            'severity': 'high',
+            'title': 'Inconsistent CSV Field Count',
+            'description': f"{m_count} row(s) contain an inconsistent number of fields (expected {total_cols}). These rows require inspection before reliable analysis.",
+            'recommendation': 'Inspect malformed rows to verify delimiters, unescaped quotes, or line breaks in source data.'
+        })
 
     for col_idx, col_name in enumerate(headers):
         col_values = [r[col_idx] for r in data]
@@ -360,7 +443,9 @@ def analyze_dataset(headers, data):
     for r_idx, row in enumerate(data[:25]):
         row_dict = {'_row_id': r_idx + 1}
         for c_idx, h in enumerate(headers):
-            row_dict[h] = row[c_idx]
+            row_dict[h] = row[c_idx] if c_idx < len(row) else ''
+        if len(row) > len(headers):
+            row_dict['_extra_fields'] = row[len(headers):]
         preview_rows.append(row_dict)
 
     return {
@@ -380,7 +465,13 @@ def analyze_dataset(headers, data):
             'outlier_penalty': round(outlier_penalty, 1)
         },
         'detected_issues': detected_issues,
-        'preview_rows': preview_rows
+        'preview_rows': preview_rows,
+        'csv_structure': structure or {
+            'valid': True,
+            'expected_columns': total_cols,
+            'malformed_rows': 0,
+            'malformed_row_details': []
+        }
     }
 
 def apply_transformations(headers, data, operations):
@@ -738,11 +829,11 @@ def generate_python_repro_code(operations, filename="dataset.csv"):
             elif num_val is not None and op == '!=':
                 lines.append(f"df = df[pd.to_numeric(df[{col_repr}], errors='coerce') != {num_val}]")
             elif op == '==':
-                lines.append(f"df = df[df[{col_repr}].astype(str).str.lower() == {json.dumps(str(val).lower())}]")
+                lines.append(f"df = df[df[{col_repr}].astype('string').str.lower() == {json.dumps(str(val).lower())}]")
             elif op == '!=':
-                lines.append(f"df = df[df[{col_repr}].astype(str).str.lower() != {json.dumps(str(val).lower())}]")
+                lines.append(f"df = df[df[{col_repr}].astype('string').str.lower() != {json.dumps(str(val).lower())}]")
             elif op == 'contains':
-                lines.append(f"df = df[df[{col_repr}].astype(str).str.contains({json.dumps(str(val))}, case=False, na=False)]")
+                lines.append(f"df = df[df[{col_repr}].astype('string').str.contains({json.dumps(str(val))}, case=False, na=False)]")
 
     type_conversions = operations.get('type_conversions', {})
     for col, dtype in type_conversions.items():
@@ -752,11 +843,11 @@ def generate_python_repro_code(operations, filename="dataset.csv"):
         elif dtype == 'float':
             lines.append(f"df[{col_repr}] = pd.to_numeric(df[{col_repr}], errors='coerce')")
         elif dtype == 'string':
-            lines.append(f"df[{col_repr}] = df[{col_repr}].astype(str)")
+            lines.append(f"df[{col_repr}] = df[{col_repr}].astype('string')")
         elif dtype == 'boolean':
             lines.append(f"# Safe semantic boolean conversion for {col_repr} (explicit mapping, never naive astype(bool))")
-            lines.append(f"_bool_map = {{'true': True, 't': True, 'yes': True, '1': True, '1.0': True, 'false': False, 'f': False, 'no': False, '0': False, '0.0': False}}")
-            lines.append(f"_norm = df[{col_repr}].astype(str).str.strip().str.lower()")
+            lines.append(f"_bool_map = {{'true': True, 't': True, 'yes': True, '1': True, '1.0': True, 'بله': True, 'صحیح': True, 'درست': True, 'false': False, 'f': False, 'no': False, '0': False, '0.0': False, 'خیر': False, 'غلط': False, 'نادرست': False, 'نه': False}}")
+            lines.append(f"_norm = df[{col_repr}].astype('string').str.strip().str.lower()")
             lines.append(f"_mapped = _norm.map(_bool_map)")
             lines.append(f"_invalid_cnt = (df[{col_repr}].notna() & _mapped.isna()).sum()")
             lines.append(f"if _invalid_cnt > 0:")
@@ -791,10 +882,10 @@ def main():
         command = payload.get('command', 'analyze')
         csv_content = payload.get('csv_content', '')
 
-        headers, data = parse_csv_stream(csv_content)
+        headers, data, structure = parse_csv_stream(csv_content)
 
         if command == 'analyze':
-            analysis = analyze_dataset(headers, data)
+            analysis = analyze_dataset(headers, data, structure)
             print(json.dumps({'status': 'success', 'analysis': analysis}))
 
         elif command == 'preview_transform':

@@ -38,6 +38,20 @@ export interface DetectedIssue {
   recommendation: string;
 }
 
+export interface MalformedRowDetail {
+  row_number: number;
+  expected_columns: number;
+  actual_columns: number;
+  raw_fields?: string[];
+}
+
+export interface CsvStructure {
+  valid: boolean;
+  expected_columns: number;
+  malformed_rows: number;
+  malformed_row_details: MalformedRowDetail[];
+}
+
 export interface ScoreBreakdown {
   missing_penalty: number;
   duplicate_penalty: number;
@@ -58,6 +72,7 @@ export interface DatasetAnalysis {
   score_breakdown: ScoreBreakdown;
   detected_issues: DetectedIssue[];
   preview_rows: Record<string, any>[];
+  csv_structure?: CsvStructure;
 }
 
 export interface MissingActionConfig {

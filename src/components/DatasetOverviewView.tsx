@@ -8,6 +8,7 @@ import {
   ShieldCheck,
   Wrench,
   AlertTriangle,
+  AlertCircle,
   Info,
   ChevronLeft,
   ChevronRight,
@@ -33,6 +34,7 @@ export const DatasetOverviewView: React.FC<DatasetOverviewViewProps> = ({
   const [activeTab, setActiveTab] = useState<'grid' | 'schema' | 'stats'>('grid');
   const [searchQuery, setSearchQuery] = useState('');
   const [page, setPage] = useState(1);
+  const [showMalformedDetails, setShowMalformedDetails] = useState(false);
   const rowsPerPage = 12;
 
   const { analysis } = dataset;
@@ -191,6 +193,80 @@ export const DatasetOverviewView: React.FC<DatasetOverviewViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* CSV Structural Integrity Section */}
+      {analysis.csv_structure && !analysis.csv_structure.valid ? (
+        <div className="p-4 rounded-lg border border-rose-900/70 bg-rose-950/30 flex flex-col gap-3 text-xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-start gap-2.5">
+              <AlertCircle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-semibold text-rose-200 block">
+                  {t('csvStructureWarningTitle')} ({analysis.csv_structure.malformed_rows} {isRTL ? 'سطر' : 'rows'})
+                </span>
+                <span className="text-rose-300/90 text-xs">
+                  {isRTL
+                    ? `${analysis.csv_structure.malformed_rows} سطر دارای تعداد فیلد ناسازگار هستند. این سطرها باید قبل از تحلیل قابل اعتماد بررسی شوند.`
+                    : `${analysis.csv_structure.malformed_rows} rows contain an inconsistent number of fields. These rows require inspection before reliable analysis.`}
+                </span>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowMalformedDetails(!showMalformedDetails)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-rose-900/50 hover:bg-rose-900/80 text-rose-200 border border-rose-700/50 font-medium transition-colors cursor-pointer self-start sm:self-auto shrink-0"
+            >
+              <span>{showMalformedDetails ? t('csvStructureHideBtn') : t('csvStructureInspectBtn')}</span>
+            </button>
+          </div>
+
+          {showMalformedDetails && analysis.csv_structure.malformed_row_details.length > 0 && (
+            <div className="mt-2 pt-3 border-t border-rose-900/50 space-y-2">
+              <div className="text-xs font-mono text-neutral-300">
+                {t('csvStructureExpectedCols')}: <span className="text-emerald-400 font-bold">{analysis.csv_structure.expected_columns}</span>
+              </div>
+              <div className="max-h-60 overflow-y-auto border border-neutral-800 rounded bg-neutral-950/80">
+                <table className="w-full text-left font-mono text-[11px]" dir="ltr">
+                  <thead className="bg-neutral-900 text-neutral-400 border-b border-neutral-800">
+                    <tr>
+                      <th className="py-1.5 px-3">{t('csvStructureRowNumber')}</th>
+                      <th className="py-1.5 px-3">{t('csvStructureExpectedCols')}</th>
+                      <th className="py-1.5 px-3">{t('csvStructureActualCols')}</th>
+                      <th className="py-1.5 px-3">{t('csvStructureRawFields')}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-850 text-neutral-200">
+                    {analysis.csv_structure.malformed_row_details.map((m, idx) => (
+                      <tr key={idx} className="hover:bg-neutral-900/50">
+                        <td className="py-1.5 px-3 text-rose-300 font-semibold">{m.row_number}</td>
+                        <td className="py-1.5 px-3 text-neutral-400">{m.expected_columns}</td>
+                        <td className="py-1.5 px-3">
+                          <span className={m.actual_columns > m.expected_columns ? 'text-amber-400' : 'text-rose-400'}>
+                            {m.actual_columns} ({m.actual_columns > m.expected_columns ? `+${m.actual_columns - m.expected_columns}` : `${m.actual_columns - m.expected_columns}`})
+                          </span>
+                        </td>
+                        <td className="py-1.5 px-3 text-neutral-300 truncate max-w-md" title={m.raw_fields?.join(' | ')}>
+                          {m.raw_fields?.join(' | ') || '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : analysis.csv_structure && analysis.csv_structure.valid ? (
+        <div className="p-2.5 px-3 rounded-lg border border-neutral-850 bg-neutral-900/40 flex items-center justify-between text-xs text-neutral-300">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+            <span className="font-medium text-emerald-300">{t('csvStructureValid')}</span>
+            <span className="text-neutral-500">·</span>
+            <span className="text-neutral-400">
+              {t('csvStructureAllValidDesc', { count: analysis.csv_structure.expected_columns || columns.length })}
+            </span>
+          </div>
+        </div>
+      ) : null}
 
       {/* Quick Status Bar */}
       {analysis.detected_issues.length > 0 ? (
