@@ -5,7 +5,7 @@ import fs from 'fs';
 import { spawn } from 'child_process';
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
 
 app.use(express.json({ limit: '50mb' }));
@@ -43,6 +43,11 @@ function runPythonEngine(payload: any): Promise<any> {
     py.stdin.end();
   });
 }
+
+// Health check endpoint for Railway and container orchestration
+app.get('/health', (_req: Request, res: Response) => {
+  res.json({ status: 'ok' });
+});
 
 // API Routes
 app.post('/api/analyze', async (req: Request, res: Response) => {

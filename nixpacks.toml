@@ -1,0 +1,14 @@
+# Nixpacks configuration for Railway deployment
+# Ensures both Node.js 22 and Python 3 are installed in the deployment container.
+
+[phases.setup]
+nixPkgs = ["nodejs_22", "python3"]
+
+[phases.install]
+cmds = ["npm install"]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[start]
+cmd = "npm run start"

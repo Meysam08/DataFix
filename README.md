@@ -668,12 +668,16 @@ npm run build
 
 | Variable | Required | Used By | Purpose | Example |
 | :--- | :--- | :--- | :--- | :--- |
-| `NODE_ENV` | Optional | `server.ts` | Determines whether Vite runs in middleware mode (`development`) or serves static assets (`production`). | `production` |
-| `PORT` | Optional | `server.ts` | Port for Express server (defaults to 3000). | `3000` |
-| `GEMINI_API_KEY` | Optional | `.env.example` | Template variable for optional AI Studio features (unused in core engine). | `MY_GEMINI_API_KEY` |
+| `PORT` | Optional (Provided by Railway) | `server.ts` | The HTTP port Express binds to. Defaults to `3000` locally. Railway automatically injects this variable. | `PORT=4173` |
+| `NODE_ENV` | Optional | `server.ts` | When set to `production`, Express serves precompiled assets from `dist/`. When `development`, mounts Vite middlewares. | `production` |
+| `GEMINI_API_KEY` | Optional | `.env.example` | Template variable for optional AI Studio features (unused in core data engine). | `MY_GEMINI_API_KEY` |
 | `APP_URL` | Optional | `.env.example` | Application host URL template for Cloud Run. | `https://my-app.run.app` |
 
-*Note on Configuration:* **No environment variables are required to run DataFix locally.** The core data engine, parser, and UI run without any API keys or credentials.
+*Important Configuration Notes:*
+* **No `.env` file is required for Railway deployment.**
+* Railway automatically injects the assigned service port via `process.env.PORT`.
+* The server reads `const PORT = Number(process.env.PORT) || 3000;` and binds to `0.0.0.0:${PORT}`.
+* Local developers can copy `.env.example` to `.env` if desired, but default local startup (`npm run dev`) works out-of-the-box with zero configuration.
 
 ---
 
@@ -682,25 +686,47 @@ npm run build
 ### Current AI Studio Deployment
 In Google AI Studio Build, the application runs on Cloud Run with container port 3000 mapped to `server.ts` (`npm run start` or `npm run dev`). Node.js and Python 3 are present in the Linux container environment.
 
+### Railway Deployment
+DataFix is configured for seamless single-service deployment on Railway using Nixpacks:
+
+* **Configuration Files:** `nixpacks.toml` and `railway.json`.
+* **Builder:** `NIXPACKS` (defined in `railway.json`).
+* **Environment Provisioning (`nixpacks.toml`):**
+  ```toml
+  [phases.setup]
+  nixPkgs = ["nodejs_22", "python3"]
+
+  [phases.install]
+  cmds = ["npm install"]
+
+  [phases.build]
+  cmds = ["npm run build"]
+
+  [start]
+  cmd = "npm run start"
+  ```
+* **Node.js Requirement:** Node.js `>= 20.0.0` (provided as `nodejs_22` via Nixpacks).
+* **Python Requirement:** Python `>= 3.10.0` (provided as `python3` via Nixpacks).
+* **Python Dependencies:** **None.** The Python calculation engine (`engine/datafix_engine.py`) uses strictly the Python standard library. No `requirements.txt` or `pip install` is required or needed.
+* **Build Command:** `npm run build`
+* **Start Command:** `npm run start` (executes `tsx server.ts`)
+* **Service Binding:** Express listens on `0.0.0.0` and respects Railway's dynamic `PORT` via `Number(process.env.PORT) || 3000`.
+* **Health Check:** Liveness endpoint at `GET /health` returning `{"status":"ok"}` with path configured in `railway.json`.
+* **Single-Service Architecture:** Railway hosts both the Express server (serving compiled React `dist/` assets) and executes `python3 engine/datafix_engine.py` for `/api/*` requests in a single container.
+
 ### Generic Production Deployment (Docker / VPS / PaaS)
 To deploy DataFix in standard production environments:
 1. Ensure both **Node.js (>= 20)** and **Python 3 (>= 3.10)** are installed on the host or container.
 2. Build the frontend: `npm run build`.
 3. Set `NODE_ENV=production`.
-4. Start the server: `node -r tsx server.ts` or `npm run start`.
-Express will serve the precompiled assets from `dist/` and spawn `engine/datafix_engine.py` for API requests.
+4. Start the server: `npm run start` (or `tsx server.ts`).
+Express will serve precompiled assets from `dist/` and spawn `engine/datafix_engine.py` for API requests.
 
 ### Static Hosting (Vercel / GitHub Pages / Netlify / S3)
-Because DataFix contains an isomorphic TypeScript data engine (`src/utils/engine.ts`), the application can be deployed as a **pure static SPA**:
+Because DataFix contains an isomorphic TypeScript data engine (`src/utils/engine.ts`), the application can also be deployed as a **pure static SPA**:
 1. Run `npm run build`.
 2. Deploy the `dist/` directory to any static hosting provider.
-If `/api/*` endpoints return 404, the application automatically falls back to in-browser execution with identical statistical behavior.
-
-### Railway Deployment
-* **Build Command:** `npm install && npm run build`
-* **Start Command:** `npm run start`
-* **Port:** Set `PORT=3000` (or let Railway bind via `$PORT`).
-* **Environment:** Ensure the selected Railway buildpack or Dockerfile includes Python 3.
+If `/api/*` endpoints return 404 or are unreachable, the application automatically falls back to in-browser execution with identical statistical behavior.
 
 ---
 
