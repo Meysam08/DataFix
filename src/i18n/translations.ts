@@ -134,11 +134,11 @@ export const translations: Record<Language, Record<TranslationKey, string>> = {
     qualityTitle: 'Data Quality & Diagnostic Report',
     qualitySubtitle:
       'Automated inspection of missing cells, duplicate records, IQR outliers, and column schema health.',
-    scoreHeroTitle: 'DataFix Quality Score (Heuristic)',
-    benchmark: 'DataFix Heuristic: 80%+ indicates high hygiene',
-    scoreGood: 'High hygiene dataset according to DataFix heuristics',
-    scoreMedium: 'Moderate hygiene with remediable defects detected',
-    scorePoor: 'Significant defects detected by DataFix heuristic rules',
+    scoreHeroTitle: 'Data Hygiene Score (Deterministic Heuristic)',
+    benchmark: 'Structural Hygiene Benchmark: Measures technical completeness, not ML modeling suitability',
+    scoreGood: 'High structural hygiene (few missing cells/duplicates). Does not imply statistical optimality for all ML models.',
+    scoreMedium: 'Moderate structural hygiene with remediable missingness or duplicate records.',
+    scorePoor: 'Low structural hygiene: substantial missing data or format inconsistencies.',
     deductionsTitle: 'Mathematical Score Deduction Breakdown',
     deductionBase: 'Base Score',
     missingPenalty: 'Missing Values Penalty',
@@ -164,12 +164,12 @@ export const translations: Record<Language, Record<TranslationKey, string>> = {
     csvStructureInspectBtn: 'Inspect Malformed Rows',
     csvStructureHideBtn: 'Hide Malformed Rows',
     csvStructureAllValidDesc: 'All rows match the header column count ({count} columns).',
-    heuristicScopeTitle: 'DataFix Hygiene Scope & Statistical Bounds',
+    heuristicScopeTitle: 'Data Hygiene Scope & Machine Learning Modeling Boundaries',
     heuristicScopeDesc:
-      'The DataFix Score strictly measures dataset hygiene (missing rates, duplicates, empty columns, type consistency, and IQR outlier density). It is NOT an assessment of model suitability, target leakage, class balance, or statistical validity.',
+      'The DataFix Score strictly measures dataset hygiene (missing rates, duplicates, empty columns, and type consistency). It does NOT imply suitability for machine learning (e.g. 96% does not mean 96% suitable for ML). Applying aggressive transformations like clipping zero-IQR features or legitimate targets to raise this score does NOT automatically make the dataset statistically better.',
     outlierSemanticsTitle: 'Outlier Semantics & 1.5× IQR Detection',
     outlierSemanticsDesc:
-      'Statistical outliers identified by the 1.5× IQR rule represent observations in extreme distribution tails. They are not necessarily invalid entries or errors, but require inspection to discern legitimate extremes from data flaws.',
+      'Statistical outliers identified by the 1.5× IQR rule represent observations in extreme distribution tails. In concentrated distributions (where IQR = 0), the method degenerates and cannot identify true anomalies. Inspect distributions rather than automatically clipping.',
     // Cleaning
     workspaceTitle: 'Dataset Cleaning Workspace',
     workspaceSubtitle:
@@ -382,11 +382,11 @@ export const translations: Record<Language, Record<TranslationKey, string>> = {
     qualityTitle: 'گزارش کیفیت و عیب‌یابی داده‌ها',
     qualitySubtitle:
       'بررسی خودکار مقادیر گمشده، سطرهای تکراری، داده‌های پرت آماری (IQR) و یکپارچگی انواع ستون‌ها.',
-    scoreHeroTitle: 'امتیاز کیفیت دیتافیکس (معیار هیوریستیک)',
-    benchmark: 'معیار هیوریستیک دیتافیکس: بالای ۸۰٪ نشان‌دهنده سلامت بالاست',
-    scoreGood: 'بر مبنای معیارهای هیوریستیک دیتافیکس داده‌ها دارای سلامت بالایی هستند',
-    scoreMedium: 'سطح بهداشت متوسط با عیوب قابل اصلاح شناسایی شد',
-    scorePoor: 'عیوب اساسی بر مبنای قوانین هیوریستیک دیتافیکس کشف شد',
+    scoreHeroTitle: 'امتیاز سلامت و بهداشت داده (معیار قطعی هیوریستیک)',
+    benchmark: 'معیار بهداشت ساختاری: سنجش پاکیزگی فنی، نه مناسبت مدل یادگیری ماشین',
+    scoreGood: 'بهداشت ساختاری بالا (تعداد کم سلول‌های خالی و تکراری). این امتیاز به معنای بهینگی آماری برای مدل‌های یادگیری ماشین نیست.',
+    scoreMedium: 'بهداشت ساختاری متوسط با مقادیر گم‌شده یا سطرهای تکراری قابل اصلاح.',
+    scorePoor: 'بهداشت ساختاری پایین: حجم قابل توجه داده‌های گمشده یا ناسازگاری در قالب.',
     deductionsTitle: 'ریز محاسبات کسری امتیاز کیفیت',
     deductionBase: 'امتیاز پایه',
     missingPenalty: 'جریمه خانه‌های دارای مقدار خالی',
@@ -412,12 +412,12 @@ export const translations: Record<Language, Record<TranslationKey, string>> = {
     csvStructureInspectBtn: 'مشاهده سطرهای دارای ناسازگاری',
     csvStructureHideBtn: 'بستن لیست سطرهای ناسازگار',
     csvStructureAllValidDesc: 'تمامی سطرها دقیقاً با تعداد ستون‌های تعریف‌شده ({count} ستون) همخوانی دارند.',
-    heuristicScopeTitle: 'محدوده بهداشت داده و مرزهای آماری دیتافیکس',
+    heuristicScopeTitle: 'محدوده بهداشت داده و مرزهای مدل‌سازی یادگیری ماشین',
     heuristicScopeDesc:
-      'امتیاز کیفیت دیتافیکس صرفاً معیاری برای بهداشت فنی دیتاست (نرخ مقادیر خالی، ردیف‌های تکراری، ستون‌های تهی، یکپارچگی نوع داده و تراکم داده‌های پرت آماری) است و بیانگر مناسبت مدل، نشت هدف، تعادل کلاس‌ها یا اعتبار آماری نیست.',
+      'امتیاز دیتافیکس صرفاً معیاری برای پاکیزگی و بهداشت ساختاری دیتاست است و به هیچ وجه بیانگر مناسب بودن برای یادگیری ماشین نیست (امتیاز ۹۶٪ به معنای ۹۶٪ مناسبت برای مدل‌سازی نیست). اعمال تغییرات تهاجمی مانند برش مقادیر در ویژگی‌های با توزیع متمرکز یا متغیرهای هدف تنها به قصد افزایش این امتیاز، لزوماً دیتاست را از نظر آماری بهتر یا مناسب‌تر نمی‌کند.',
     outlierSemanticsTitle: 'مفهوم داده‌های پرت آماری و تشخیص با قاعده ۱.۵× IQR',
     outlierSemanticsDesc:
-      'داده‌های پرت شناسایی‌شده با قاعده استاندارد ۱.۵×IQR صرفاً مقادیر واقع در دُم‌های توزیع آماری هستند. این مقادیر لزوماً داده‌های فاسد یا خطا نیستند، بلکه نیازمند بررسی انسانی برای تمایز میان مقادیر واقعی شدید و خطاهای ورود داده می‌باشند.',
+      'داده‌های پرت شناسایی‌شده با قاعده ۱.۵×IQR مقادیر واقع در دُم‌های توزیع آماری هستند. در توزیع‌های متمرکز (که IQR=0 است) این روش ناتوان بوده و نباید به طور خودکار مقادیر را برش داد. قبل از هرگونه تغییر، توزیع را به دقت بازبینی کنید.',
     // Cleaning
     workspaceTitle: 'میز کار پاک‌سازی و پیش‌پردازش',
     workspaceSubtitle:

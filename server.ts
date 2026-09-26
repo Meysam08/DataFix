@@ -47,7 +47,7 @@ function runPythonEngine(payload: any): Promise<any> {
 // API Routes
 app.post('/api/analyze', async (req: Request, res: Response) => {
   try {
-    const { csv_content } = req.body;
+    const { csv_content, target_column } = req.body;
     if (!csv_content || typeof csv_content !== 'string') {
       return res.status(400).json({ error: 'csv_content string is required' });
     }
@@ -55,6 +55,7 @@ app.post('/api/analyze', async (req: Request, res: Response) => {
     const result = await runPythonEngine({
       command: 'analyze',
       csv_content,
+      target_column,
     });
 
     res.json(result);

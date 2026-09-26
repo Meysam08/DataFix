@@ -310,13 +310,50 @@ function calculateColumnStats(numbers: number[]): ColumnStats | null {
     upper_bound: Number(upper_bound.toFixed(4)),
     outlier_count: outliers.length,
     sample_outliers: outliers.slice(0, 5).map((v) => Number(v.toFixed(4))),
+    iqr_is_zero: iqr === 0,
   };
 }
 
-export function localAnalyzeDataset(csvText: string, _filename?: string): DatasetAnalysis {
+export function calculatePearsonCorrelation(xVals: number[], yVals: number[]): number {
+  if (xVals.length < 5 || xVals.length !== yVals.length) return 0;
+  const n = xVals.length;
+  const meanX = xVals.reduce((a, b) => a + b, 0) / n;
+  const meanY = yVals.reduce((a, b) => a + b, 0) / n;
+  let num = 0;
+  let denX = 0;
+  let denY = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xVals[i] - meanX;
+    const dy = yVals[i] - meanY;
+    num += dx * dy;
+    denX += dx * dx;
+    denY += dy * dy;
+  }
+  const den = Math.sqrt(denX * denY);
+  if (den === 0) return 0;
+  return num / den;
+}
+
+export function localAnalyzeDataset(
+  csvText: string,
+  _filename?: string,
+  targetColumn?: string | null
+): DatasetAnalysis {
   const { headers, rows, structure } = parseCsv(csvText);
   const totalRows = rows.length;
   const totalCols = headers.length;
+
+  const targetRegex = /(price|target|label|cost|salary|revenue|churn|outcome|grade|score|sales|profit|value)/i;
+  const target_candidates: string[] = [];
+  headers.forEach((h) => {
+    if (targetRegex.test(h) || h.toLowerCase().endsWith('(usd)') || h.toLowerCase().endsWith('_usd')) {
+      target_candidates.push(h);
+    }
+  });
+  const designatedTarget = targetColumn && headers.includes(targetColumn) ? targetColumn : null;
+  if (designatedTarget && !target_candidates.includes(designatedTarget)) {
+    target_candidates.push(designatedTarget);
+  }
 
   if (totalRows === 0 || totalCols === 0) {
     return {
@@ -338,6 +375,7 @@ export function localAnalyzeDataset(csvText: string, _filename?: string): Datase
       detected_issues: [
         {
           severity: 'high',
+          confidence: 'actionable',
           title: 'Empty Dataset',
           description: 'The dataset has no data rows.',
           recommendation: 'Upload a valid CSV with header and data rows.',
@@ -345,6 +383,9 @@ export function localAnalyzeDataset(csvText: string, _filename?: string): Datase
       ],
       preview_rows: [],
       csv_structure: structure,
+      target_column: designatedTarget,
+      target_candidates,
+      collinear_pairs: [],
     };
   }
 
@@ -442,52 +483,115 @@ export function localAnalyzeDataset(csvText: string, _filename?: string): Datase
       });
     }
 
+    const isTargetCol = target_candidates.includes(colName) || designatedTarget === colName;
+
     // Issues
     if (isEmpty) {
       detected_issues.push({
         severity: 'high',
+        confidence: 'actionable',
+        detection_type: 'missing',
         title: `Empty Column: ${colName}`,
         column: colName,
         description: `Column "${colName}" has 100% missing values. It contains no variance for ML algorithms.`,
         recommendation: 'Drop column in Cleaning Workspace',
+        risk: 'Feature has zero variance and conveys no predictive signal to estimators.',
       });
     } else if (missingPct > 20) {
+      let rec: string;
+      if (missingPct > 50) {
+        rec = 'Consider dropping column due to high missingness';
+      } else if (inferredType === 'integer' || inferredType === 'float') {
+        rec = 'Impute with median or drop rows depending on whether missingness invalidates observation';
+      } else {
+        rec = 'Mode imputation is one possible strategy, but row removal may be preferable when missing values make records unsuitable';
+      }
       detected_issues.push({
         severity: missingPct > 50 ? 'high' : 'medium',
+        confidence: 'actionable',
+        detection_type: 'missing',
         title: `High Missing Rate in ${colName}`,
         column: colName,
         description: `Column has ${missingCount} missing values (${missingPct}% of rows).`,
-        recommendation: missingPct > 50 ? 'Consider dropping column' : 'Impute with median or mode',
+        recommendation: rec,
+        risk: 'High missingness increases synthetic distortion if imputed.',
       });
     } else if (missingCount > 0) {
+      const rec = inferredType === 'integer' || inferredType === 'float'
+        ? 'Impute with median or drop rows depending on whether missingness invalidates observation'
+        : 'Mode imputation is one possible strategy, but row removal may be preferable when missing values make records unsuitable';
       detected_issues.push({
         severity: 'low',
+        confidence: 'actionable',
+        detection_type: 'missing',
         title: `Missing Values in ${colName}`,
         column: colName,
         description: `${missingCount} empty cells (${missingPct}%) found.`,
-        recommendation: 'Impute or drop affected rows',
+        recommendation: rec,
+        risk: 'Mode/median imputation compresses variance; row removal reduces sample size.',
       });
     }
 
     if (typeInconsistencies > 0) {
       detected_issues.push({
         severity: 'medium',
+        confidence: 'actionable',
+        detection_type: 'type',
         title: `Type Inconsistency in ${colName}`,
         column: colName,
         description: `${typeInconsistencies} values cannot be parsed as ${inferredType}.`,
         recommendation: 'Cast to clean numeric or replace invalid strings',
+        risk: 'Non-numeric text in numeric features will trigger model training failure.',
       });
     }
 
     if (stats && stats.outlier_count > 0) {
       const outlierPct = Number(((stats.outlier_count / numericValues.length) * 100).toFixed(2));
-      if (outlierPct > 1.0) {
+      
+      if (stats.iqr_is_zero) {
         detected_issues.push({
-          severity: outlierPct > 5.0 ? 'medium' : 'low',
+          severity: 'low',
+          confidence: 'review',
+          detection_type: 'outlier',
+          title: `Degenerate IQR / Concentrated Distribution in ${colName}`,
+          column: colName,
+          description: `${stats.outlier_count} values differ from the IQR boundary because Q1, median, and Q3 are all ${stats.median}. This does not establish that these values are invalid. Inspect the distribution before modifying them.`,
+          recommendation: `Inspect distribution before modifying; automatic clipping to ${stats.median} could destroy legitimate variation.`,
+          risk: `Clipping these values to ${stats.median} would destroy legitimate feature variation and erase true information.`,
+        });
+      } else {
+        const maxVal = stats.max;
+        const ub = stats.upper_bound;
+        const minVal = stats.min;
+        const lb = stats.lower_bound;
+        const isSevereLeverage = (ub > 0 && maxVal > ub * 5) || (lb < 0 && minVal < lb * 5);
+
+        let confidence: 'actionable' | 'review' = 'review';
+        let desc = `${stats.outlier_count} values (${outlierPct}%) lie outside standard 1.5x IQR boundaries [${stats.lower_bound}, ${stats.upper_bound}].`;
+        let rec = 'Review distribution before modifying; clip only if domain rules dictate.';
+        let risk = 'Modifying natural heavy-tailed distribution values artificially suppresses real-world variance.';
+
+        if (isTargetCol) {
+          confidence = 'review';
+          desc = `${stats.outlier_count} values (${outlierPct}%) outside standard 1.5x IQR [${stats.lower_bound}, ${stats.upper_bound}]. Extreme target values may be legitimate observations and should generally be investigated before being clipped or removed.`;
+          rec = 'Inspect target distribution; avoid automatic clipping of dependent variable.';
+          risk = 'Clipping target values distorts true outcome variance and biases model predictions.';
+        } else if (isSevereLeverage && outlierPct > 0.5) {
+          confidence = 'actionable';
+          desc = `${stats.outlier_count} values (${outlierPct}%) outside 1.5x IQR [${stats.lower_bound}, ${stats.upper_bound}]. Maximum observed value (${maxVal}) exhibits extreme leverage. Verify whether this represents data entry error.`;
+          rec = 'Inspect distribution; consider clipping or filtering severe leverage anomalies if confirmed as entry errors.';
+          risk = 'Extreme leverage points can destabilize linear estimators, but legitimate large observations should be preserved.';
+        }
+
+        detected_issues.push({
+          severity: outlierPct < 5.0 && !isSevereLeverage ? 'low' : 'medium',
+          confidence,
+          detection_type: 'outlier',
           title: `Potential Outliers in ${colName}`,
           column: colName,
-          description: `${stats.outlier_count} values (${outlierPct}%) lie outside the 1.5x IQR boundaries [${stats.lower_bound}, ${stats.upper_bound}].`,
-          recommendation: 'Inspect distribution, remove rows or clip values',
+          description: desc,
+          recommendation: rec,
+          risk,
         });
       }
     }
@@ -505,16 +609,74 @@ export function localAnalyzeDataset(csvText: string, _filename?: string): Datase
       stats,
       type_inconsistencies: typeInconsistencies,
       sample_values: Array.from(uniqueSet).slice(0, 5),
+      is_target_candidate: isTargetCol,
     });
+  }
+
+  // Pairwise numeric collinearity detection
+  const numericColIndices = columns
+    .map((c, i) => (c.type === 'integer' || c.type === 'float') && c.stats ? i : -1)
+    .filter((i) => i !== -1);
+  const collinear_pairs: { col1: string; col2: string; correlation: number }[] = [];
+
+  for (let idxA = 0; idxA < numericColIndices.length; idxA++) {
+    for (let idxB = idxA + 1; idxB < numericColIndices.length; idxB++) {
+      const c1Idx = numericColIndices[idxA];
+      const c2Idx = numericColIndices[idxB];
+      const col1Name = headers[c1Idx];
+      const col2Name = headers[c2Idx];
+
+      const pairsX: number[] = [];
+      const pairsY: number[] = [];
+      for (const r of rows) {
+        const v1 = tryParseNum(r[c1Idx]);
+        const v2 = tryParseNum(r[c2Idx]);
+        if (v1 !== null && v2 !== null) {
+          pairsX.push(v1);
+          pairsY.push(v2);
+        }
+      }
+
+      if (pairsX.length >= 5) {
+        const corr = calculatePearsonCorrelation(pairsX, pairsY);
+        if (Math.abs(corr) >= 0.98) {
+          const roundedCorr = Number(corr.toFixed(4));
+          collinear_pairs.push({
+            col1: col1Name,
+            col2: col2Name,
+            correlation: roundedCorr,
+          });
+
+          columns[c1Idx].collinear_with = columns[c1Idx].collinear_with || [];
+          columns[c1Idx].collinear_with!.push({ column: col2Name, correlation: roundedCorr });
+          columns[c2Idx].collinear_with = columns[c2Idx].collinear_with || [];
+          columns[c2Idx].collinear_with!.push({ column: col1Name, correlation: roundedCorr });
+
+          detected_issues.push({
+            severity: 'low',
+            confidence: 'informational',
+            detection_type: 'collinearity',
+            title: `Strong Correlation: ${col1Name} & ${col2Name} (r = ${corr.toFixed(2)})`,
+            column: `${col1Name}, ${col2Name}`,
+            description: `These columns may represent the same underlying measurement in different units or scales (r = ${corr.toFixed(2)}). Consider selecting one as the modeling target rather than treating both as independent targets.`,
+            recommendation: 'Inspect feature definitions; avoid treating both as independent predictive targets.',
+            risk: 'Retaining collinear duplicates inflates regression variance and distorts estimator feature importance.',
+          });
+        }
+      }
+    }
   }
 
   if (duplicate_rows > 0) {
     detected_issues.push({
       severity: duplicate_pct > 10 ? 'high' : 'medium',
+      confidence: 'actionable',
+      detection_type: 'duplicate',
       title: `${duplicate_rows} Duplicate Rows Detected`,
       column: 'All',
-      description: `${duplicate_rows} exact duplicate rows found (${duplicate_pct}% of total dataset).`,
-      recommendation: 'Remove duplicate rows in Cleaning Workspace',
+      description: `${duplicate_rows} exact duplicate rows found (${duplicate_pct}% of total dataset). Exact duplicate rows were detected; confirm that duplicate observations do not represent legitimate repeated records.`,
+      recommendation: 'Remove duplicate rows for ML datasets to prevent leakage, after verifying they are not legitimate repeated measurements.',
+      risk: 'If duplicates represent distinct repeated events, dropping them reduces valid empirical sample weight.',
     });
   }
 
@@ -527,7 +689,11 @@ export function localAnalyzeDataset(csvText: string, _filename?: string): Datase
   const emptyColPenalty = Math.min(20, (emptyCols / totalCols) * 100);
   const totalIncon = columns.reduce((acc, c) => acc + c.type_inconsistencies, 0);
   const typePenalty = Math.min(10, (totalIncon / totalCells) * 100 * 5);
-  const totalOutliers = columns.reduce((acc, c) => acc + (c.stats ? c.stats.outlier_count : 0), 0);
+  // Exclude degenerate IQR zero columns from outlier penalty deduction
+  const totalOutliers = columns.reduce(
+    (acc, c) => acc + (c.stats && !c.stats.iqr_is_zero ? c.stats.outlier_count : 0),
+    0
+  );
   const outlierPenalty = Math.min(10, (totalOutliers / totalCells) * 100 * 0.5);
 
   const quality_score = Math.max(
@@ -566,6 +732,9 @@ export function localAnalyzeDataset(csvText: string, _filename?: string): Datase
     detected_issues,
     preview_rows,
     csv_structure: structure,
+    target_column: designatedTarget,
+    target_candidates,
+    collinear_pairs,
   };
 }
 
@@ -578,6 +747,7 @@ export function localApplyTransformations(
   let curHeaders = [...origHeaders];
   let curRows = origRows.map((r) => [...r]);
   const applied: string[] = [];
+  const operationDetails: any[] = [];
   const warnings: string[] = [];
   const diffSamples: DiffSample[] = [];
 
@@ -597,6 +767,15 @@ export function localApplyTransformations(
     curRows = deduped;
     if (removed > 0) {
       applied.push(`Removed ${removed} duplicate row(s)`);
+      operationDetails.push({
+        category: 'duplicates',
+        detection: `${removed} exact duplicate row(s) identified`,
+        why_detected: 'Row contents are completely identical across all columns',
+        rationale: 'Deduplication prevents data leakage between train/test splits',
+        risk: 'If identical observations represent distinct real-world events, sample frequency is altered',
+        confidence: 'actionable',
+        user_action: `Removed ${removed} duplicate row(s)`,
+      });
     }
   }
 
@@ -607,6 +786,15 @@ export function localApplyTransformations(
     const dropped = initLen - curRows.length;
     if (dropped > 0) {
       applied.push(`Dropped ${dropped} row(s) containing missing values`);
+      operationDetails.push({
+        category: 'missing',
+        detection: `${dropped} row(s) containing missing cells`,
+        why_detected: 'Empty or sentinel missing values in row records',
+        rationale: 'Global strategy: drop all incomplete rows',
+        risk: 'Reduces total sample size and may introduce selection bias if missingness is non-random',
+        confidence: 'actionable',
+        user_action: `Dropped ${dropped} row(s)`,
+      });
     }
   }
 
@@ -622,6 +810,16 @@ export function localApplyTransformations(
       const dropped = initLen - curRows.length;
       if (dropped > 0) {
         applied.push(`Dropped ${dropped} row(s) with missing '${colName}'`);
+        operationDetails.push({
+          category: 'missing',
+          column: colName,
+          detection: `${dropped} missing cell(s) in '${colName}'`,
+          why_detected: `Empty or sentinel missing values in feature '${colName}'`,
+          rationale: `Dropped rows with missing '${colName}'`,
+          risk: 'Reduces sample size for downstream modeling',
+          confidence: 'actionable',
+          user_action: `Dropped ${dropped} row(s) with missing '${colName}'`,
+        });
       }
     } else if (['mean', 'median', 'mode', 'custom'].includes(act.action)) {
       const validVals = curRows.map((r) => r[cIdx]).filter((v) => !isEmptyVal(v));
@@ -680,6 +878,16 @@ export function localApplyTransformations(
         });
         if (imputed > 0) {
           applied.push(`Filled ${imputed} missing cell(s) in '${colName}' with ${act.action} (${fillVal})`);
+          operationDetails.push({
+            category: 'missing',
+            column: colName,
+            detection: `${imputed} missing cell(s) in '${colName}'`,
+            why_detected: `Empty or sentinel missing values in feature '${colName}'`,
+            rationale: `Imputed missing cells with ${act.action} (${fillVal})`,
+            risk: 'Artificially compresses feature variance and can bias correlations',
+            confidence: 'actionable',
+            user_action: `Imputed ${imputed} cell(s) with ${act.action} (${fillVal})`,
+          });
         }
       }
     }
@@ -688,7 +896,6 @@ export function localApplyTransformations(
   // 3. Outlier handling
   const outlierActions = operations.outlier_actions || {};
   for (const [colName, act] of Object.entries(outlierActions)) {
-    if (act === 'keep') continue;
     const cIdx = curHeaders.indexOf(colName);
     if (cIdx === -1) continue;
 
@@ -700,7 +907,22 @@ export function localApplyTransformations(
     const lb = stats.lower_bound;
     const ub = stats.upper_bound;
 
-    if (act === 'remove') {
+    if (act === 'keep') {
+      operationDetails.push({
+        category: 'outliers',
+        column: colName,
+        detection: stats.iqr_is_zero
+          ? `${stats.outlier_count} values differing from boundary`
+          : `${stats.outlier_count} values outside 1.5x IQR [${lb}, ${ub}]`,
+        why_detected: stats.iqr_is_zero
+          ? `Q1 = ${stats.q1}, Median = ${stats.median}, Q3 = ${stats.q3} (IQR = 0, concentrated distribution)`
+          : `Distribution tails beyond 1.5x IQR [${lb}, ${ub}]`,
+        rationale: 'Preserved original values without alteration (Recommended for concentrated distributions and target candidates)',
+        risk: 'Preserves true empirical variation; high leverage values may influence sensitive estimators',
+        confidence: 'review',
+        user_action: 'Kept original values without modification',
+      });
+    } else if (act === 'remove') {
       const initLen = curRows.length;
       curRows = curRows.filter((r) => {
         const n = tryParseNum(r[cIdx]);
@@ -710,6 +932,16 @@ export function localApplyTransformations(
       const removed = initLen - curRows.length;
       if (removed > 0) {
         applied.push(`Removed ${removed} row(s) with outliers in '${colName}' outside [${lb}, ${ub}]`);
+        operationDetails.push({
+          category: 'outliers',
+          column: colName,
+          detection: `${stats.outlier_count} values outside [${lb}, ${ub}]`,
+          why_detected: `Values outside Tukey 1.5x IQR boundaries [${lb}, ${ub}]`,
+          rationale: `Removed ${removed} row(s) containing extreme outliers`,
+          risk: 'Permanently discards observations, reducing statistical power',
+          confidence: 'actionable',
+          user_action: `Removed ${removed} row(s)`,
+        });
       }
     } else if (act === 'clip') {
       let clipped = 0;
@@ -747,6 +979,20 @@ export function localApplyTransformations(
       });
       if (clipped > 0) {
         applied.push(`Clipped ${clipped} outlier value(s) in '${colName}' to [${lb}, ${ub}]`);
+        operationDetails.push({
+          category: 'outliers',
+          column: colName,
+          detection: `${stats.outlier_count} values outside [${lb}, ${ub}]`,
+          why_detected: stats.iqr_is_zero
+            ? `Q1 = ${stats.q1}, Median = ${stats.median}, Q3 = ${stats.q3} (IQR = 0)`
+            : `Values lie beyond 1.5x IQR boundaries [${lb}, ${ub}]`,
+          rationale: `Clipped ${clipped} value(s) to [${lb}, ${ub}]`,
+          risk: stats.iqr_is_zero
+            ? `Clipping to ${stats.median} destroys all valid variation in concentrated features`
+            : 'Clipping alters the empirical distribution and compresses valid variance',
+          confidence: stats.iqr_is_zero ? 'review' : 'actionable',
+          user_action: `Clipped ${clipped} value(s) to [${lb}, ${ub}]`,
+        });
       }
     }
   }
@@ -781,6 +1027,18 @@ export function localApplyTransformations(
 
     const removed = initLen - curRows.length;
     applied.push(`Filtered rows where '${rule.column}' ${rule.operator} '${rule.value}' (${removed} removed)`);
+    if (removed > 0) {
+      operationDetails.push({
+        category: 'user_selected',
+        column: rule.column,
+        detection: `Row filter condition: '${rule.column}' ${rule.operator} '${rule.value}'`,
+        why_detected: `User configured custom rule on '${rule.column}'`,
+        rationale: `Filtered out ${removed} non-matching row(s)`,
+        risk: 'Removes records permanently; verify filter criteria aligns with target population',
+        confidence: 'actionable',
+        user_action: `Filtered ${removed} row(s)`,
+      });
+    }
   }
 
   // 5. Type Conversions
@@ -825,6 +1083,16 @@ export function localApplyTransformations(
     }
     if (convSuccess > 0) {
       applied.push(`Cast column '${colName}' to ${targetType}`);
+      operationDetails.push({
+        category: 'user_selected',
+        column: colName,
+        detection: `Column schema typing: cast '${colName}' to ${targetType}`,
+        why_detected: `Explicit formatting requested for machine learning estimators`,
+        rationale: `Standardizes data type representation for downstream models`,
+        risk: convFailed > 0 ? `${convFailed} non-parseable values were left intact` : 'Minimal; ensures numeric/boolean format consistency',
+        confidence: 'actionable',
+        user_action: `Cast '${colName}' to ${targetType}`,
+      });
     }
   }
 
@@ -836,6 +1104,18 @@ export function localApplyTransformations(
     curHeaders = keepIndices.map((i) => curHeaders[i]);
     curRows = curRows.map((r) => keepIndices.map((i) => r[i]));
     applied.push(`Dropped ${validDrops.length} column(s): ${validDrops.join(', ')}`);
+    validDrops.forEach((dCol) => {
+      operationDetails.push({
+        category: 'user_selected',
+        column: dCol,
+        detection: `Column '${dCol}' scheduled for removal`,
+        why_detected: `Feature dropped by user configuration or identified as 100% empty`,
+        rationale: `Removes unneeded or zero-variance feature from modeling matrix`,
+        risk: 'Feature information is completely excluded from estimators',
+        confidence: 'actionable',
+        user_action: `Dropped feature column '${dCol}'`,
+      });
+    });
   }
 
   // 7. Rename columns
@@ -844,7 +1124,18 @@ export function localApplyTransformations(
   curHeaders = curHeaders.map((h) => {
     if (renameCols[h] && renameCols[h].trim() && renameCols[h].trim() !== h) {
       renamedCount++;
-      return renameCols[h].trim();
+      const targetName = renameCols[h].trim();
+      operationDetails.push({
+        category: 'user_selected',
+        column: h,
+        detection: `Feature renamed from '${h}' to '${targetName}'`,
+        why_detected: `User specified standardized naming convention`,
+        rationale: `Improves column readability and pipeline naming standards`,
+        risk: 'Zero mathematical risk; schema name change only',
+        confidence: 'actionable',
+        user_action: `Renamed to '${targetName}'`,
+      });
+      return targetName;
     }
     return h;
   });
@@ -854,7 +1145,7 @@ export function localApplyTransformations(
 
   // Generate cleaned CSV string using safe RFC 4180 serializer
   const cleanedCsv = serializeCsv(curHeaders, curRows);
-  const newAnalysis = localAnalyzeDataset(cleanedCsv, filename);
+  const newAnalysis = localAnalyzeDataset(cleanedCsv, filename, operations.target_column);
 
   const preview_rows = curRows.slice(0, 25).map((r, rIdx) => {
     const rowObj: Record<string, any> = { _row_id: rIdx + 1 };
@@ -879,6 +1170,7 @@ export function localApplyTransformations(
     new_quality_score: newAnalysis.quality_score,
     new_analysis: newAnalysis,
     applied_operations: applied,
+    operation_details: operationDetails,
     warnings,
     diff_samples: diffSamples,
     preview_rows,
@@ -1011,12 +1303,15 @@ export function generatePythonScript(ops: CleaningOperations, filename: string =
 }
 
 // Full-stack API caller with automatic instant fallback
-export async function executeDatasetAnalysis(csvContent: string): Promise<DatasetAnalysis> {
+export async function executeDatasetAnalysis(
+  csvContent: string,
+  targetColumn?: string | null
+): Promise<DatasetAnalysis> {
   try {
     const res = await fetch('/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ csv_content: csvContent }),
+      body: JSON.stringify({ csv_content: csvContent, target_column: targetColumn }),
     });
     if (res.ok) {
       const data = await res.json();
@@ -1027,7 +1322,7 @@ export async function executeDatasetAnalysis(csvContent: string): Promise<Datase
   } catch (e) {
     console.warn('Backend /api/analyze failed, falling back to local Python-equivalent math:', e);
   }
-  return localAnalyzeDataset(csvContent);
+  return localAnalyzeDataset(csvContent, undefined, targetColumn);
 }
 
 export async function executePreviewTransform(

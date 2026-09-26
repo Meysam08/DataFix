@@ -12,6 +12,58 @@ export interface SampleDatasetMeta {
 
 export const SAMPLE_DATASETS: SampleDatasetMeta[] = [
   {
+    id: 'tehran-housing',
+    name: 'Tehran Apartment Market (housePrice.csv)',
+    filename: 'housePrice.csv',
+    task: 'Regression (Property Price Prediction)',
+    description: 'Tehran apartment transaction records with Area, Room, amenities, neighborhood Address, and sale prices in IRR and USD. Includes concentrated Room distribution (IQR = 0), missing Addresses, severe Area leverage outliers, duplicate records, and collinear price measurements.',
+    rowsCount: 35,
+    colsCount: 8,
+    knownIssues: [
+      'Missing values in Address (apartments with unknown neighborhood)',
+      'Concentrated distribution in Room (Q1=2, Median=2, Q3=2, IQR=0)',
+      'Severe Area entry error (1,000,000,000 m² typo)',
+      'Exact duplicate apartment listing rows',
+      'Collinear dual measurements: Price (IRR) & Price(USD) (r = 1.00)'
+    ],
+    csv: `Area,Room,Parking,Warehouse,Elevator,Address,Price,Price(USD)
+63,1,True,True,True,Shahran,1850000000,61666.67
+60,1,True,True,True,Shahran,1850000000,61666.67
+79,2,True,True,True,Pardis,550000000,18333.33
+95,2,True,True,True,Shahrake Gharb,9025000000,300833.33
+123,2,True,True,True,Shahrake Gharb,7000000000,233333.33
+105,2,True,True,True,Shahrake Gharb,7000000000,233333.33
+105,2,True,True,True,Shahrake Gharb,7000000000,233333.33
+145,2,True,True,True,Saadat Abad,12500000000,416666.67
+100,2,True,True,True,Punak,5000000000,166666.67
+85,2,True,True,True,,4200000000,140000.00
+110,2,True,True,True,Punak,5800000000,193333.33
+65,2,True,True,True,West Ferdows,3200000000,106666.67
+70,2,True,True,True,West Ferdows,3500000000,116666.67
+120,2,True,True,True,Gheitarieh,9600000000,320000.00
+88,2,True,True,True,Ostad Moein,2900000000,96666.67
+130,2,True,True,True,Gheitarieh,11000000000,366666.67
+75,2,True,True,True,Pardis,600000000,20000.00
+82,2,True,True,True,,3900000000,130000.00
+1000000000,2,True,True,True,Abazar,4500000000,150000.00
+115,2,True,True,True,Niavaran,16000000000,533333.33
+90,2,True,True,True,Punak,4800000000,160000.00
+92,2,True,True,True,Shahran,3700000000,123333.33
+108,2,True,True,True,West Ferdows,6200000000,206666.67
+73,2,True,True,True,Pardis,580000000,19333.33
+180,3,True,True,True,Saadat Abad,19500000000,650000.00
+200,3,True,True,True,Zaferanieh,28000000000,933333.33
+160,3,True,True,True,Niavaran,22000000000,733333.33
+210,3,True,True,True,Elahieh,35000000000,1166666.67
+150,3,True,True,True,Pasdaran,14500000000,483333.33
+80,2,True,True,True,Amir Abad,5200000000,173333.33
+68,2,True,True,True,West Ferdows,3300000000,110000.00
+125,2,True,True,True,Yousef Abad,8800000000,293333.33
+77,2,True,True,True,Punak,4100000000,136666.67
+102,2,True,True,True,Shahran,4900000000,163333.33
+102,2,True,True,True,Shahran,4900000000,163333.33`
+  },
+  {
     id: 'housing-regression',
     name: 'Real Estate & Housing Valuation',
     filename: 'housing_market_train.csv',

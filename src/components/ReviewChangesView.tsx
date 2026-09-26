@@ -196,12 +196,22 @@ export const ReviewChangesView: React.FC<ReviewChangesViewProps> = ({
       </div>
 
       {/* Applied Operations Audit List */}
-      <div className="rounded-xl border border-neutral-850 bg-neutral-900/50 p-5 space-y-3">
-        <h2 className="text-sm font-semibold text-neutral-200 flex items-center gap-2">
-          <CheckCircle2 className="h-4 w-4 text-emerald-400" />
-          <span>{t('auditTrailTitle')} ({transformResult.applied_operations.length} {isRTL ? 'عملیات' : 'actions'})</span>
-        </h2>
+      <div className="rounded-xl border border-neutral-850 bg-neutral-900/50 p-5 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-neutral-800 pb-3">
+          <div>
+            <h2 className="text-sm font-semibold text-neutral-200 flex items-center gap-2">
+              <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+              <span>{t('auditTrailTitle')} ({transformResult.applied_operations.length} {isRTL ? 'عملیات' : 'actions'})</span>
+            </h2>
+            <p className="text-xs text-neutral-400 mt-1">
+              {isRTL
+                ? 'تفکیک شفاف میان خطاهای قطعی، مقادیر گم‌شده، داده‌های تکراری، ناهنجاری‌های آماری و تغییرات کاربر'
+                : 'Clear distinction between deterministic fixes, missing values, duplicates, statistical anomalies, and user transformations.'}
+            </p>
+          </div>
+        </div>
 
+        {/* Quick summary tags */}
         {transformResult.applied_operations.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono">
             {transformResult.applied_operations.map((op, idx) => (
@@ -215,8 +225,146 @@ export const ReviewChangesView: React.FC<ReviewChangesViewProps> = ({
             ))}
           </div>
         ) : (
-          <div className="text-xs text-neutral-500">
-            {isRTL ? 'هیچ تغییری تنظیم نشده است؛ دیتاست به صورت اولیه صادر می‌شود.' : 'No transformations configured. Raw dataset will remain as-is.'}
+          <div className="text-xs text-neutral-500 p-3 rounded bg-neutral-950/30 border border-neutral-850">
+            {isRTL ? 'هیچ تغییری تنظیم نشده است؛ داده‌ها بدون تغییر صادر خواهند شد.' : 'No transformations configured. Raw dataset will remain as-is.'}
+          </div>
+        )}
+
+        {/* Structured 5-part Transformation Cards (Requirement 9) */}
+        {transformResult.operation_details && transformResult.operation_details.length > 0 && (
+          <div className="mt-5 pt-4 border-t border-neutral-800 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-400 font-mono flex items-center gap-1.5">
+                <Sparkles className="h-3.5 w-3.5 text-blue-400" />
+                <span>{isRTL ? 'تحلیل تفصیلی تصمیمات، دلایل آماری و ارزیابی ریسک' : 'Transformation Rationales & Statistical Risk Assessment'}</span>
+              </h3>
+              <span className="text-[11px] font-mono text-neutral-500">
+                {transformResult.operation_details.length} {isRTL ? 'مورد مستندسازی‌شده' : 'documented items'}
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              {transformResult.operation_details.map((detail, idx) => {
+                const categoryColor =
+                  detail.category === 'integrity' || detail.category === 'deterministic'
+                    ? 'border-purple-800/60 bg-purple-950/20 text-purple-300'
+                    : detail.category === 'duplicates'
+                    ? 'border-blue-800/60 bg-blue-950/20 text-blue-300'
+                    : detail.category === 'missing'
+                    ? 'border-amber-800/60 bg-amber-950/20 text-amber-300'
+                    : detail.category === 'outliers'
+                    ? 'border-rose-800/60 bg-rose-950/20 text-rose-300'
+                    : 'border-cyan-800/60 bg-cyan-950/20 text-cyan-300';
+
+                const categoryLabel =
+                  detail.category === 'integrity' || detail.category === 'deterministic'
+                    ? isRTL ? 'یکپارچگی ساختاری' : 'Deterministic Integrity'
+                    : detail.category === 'duplicates'
+                    ? isRTL ? 'مدیریت داده‌های تکراری' : 'Duplicate Records'
+                    : detail.category === 'missing'
+                    ? isRTL ? 'ترمیم مقادیر گم‌شده' : 'Missing Values'
+                    : detail.category === 'outliers'
+                    ? isRTL ? 'تحلیل ناهنجاری آماری' : 'Statistical Anomalies'
+                    : isRTL ? 'تغییرات منتخب کاربر' : 'User-Selected Transformation';
+
+                const confidenceBadge =
+                  detail.confidence === 'actionable' ? (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-emerald-950/60 text-emerald-300 border border-emerald-800/50">
+                      {isRTL ? 'اقدام‌پذیر' : 'Actionable'}
+                    </span>
+                  ) : detail.confidence === 'review' ? (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-amber-950/60 text-amber-300 border border-amber-800/50">
+                      {isRTL ? 'نیازمند بررسی' : 'Review'}
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-blue-950/60 text-blue-300 border border-blue-800/50">
+                      {isRTL ? 'اطلاعاتی' : 'Informational'}
+                    </span>
+                  );
+
+                return (
+                  <div
+                    key={idx}
+                    className="p-4 rounded-lg border border-neutral-800 bg-neutral-950/60 space-y-3"
+                  >
+                    {/* Header: Category & Feature */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-850 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-semibold border ${categoryColor}`}>
+                          {categoryLabel}
+                        </span>
+                        {detail.column && (
+                          <span className="font-mono text-xs font-bold text-neutral-200 bg-neutral-900 px-2 py-0.5 rounded border border-neutral-750" dir="ltr">
+                            {detail.column}
+                          </span>
+                        )}
+                      </div>
+                      <div>{confidenceBadge}</div>
+                    </div>
+
+                    {/* 5 Distinct Blocks */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                      {/* 1. Detection */}
+                      <div className="p-2.5 rounded bg-neutral-900/70 border border-neutral-850/80 space-y-1">
+                        <div className="text-[10px] font-mono uppercase tracking-wider text-neutral-400 font-semibold flex items-center gap-1">
+                          <span className="text-blue-400">●</span>
+                          <span>{isRTL ? 'شناسایی و تشخیص (Detection)' : 'Detection'}</span>
+                        </div>
+                        <p className="text-neutral-200 text-xs leading-relaxed">
+                          {detail.detection}
+                        </p>
+                      </div>
+
+                      {/* 2. Why Detected */}
+                      <div className="p-2.5 rounded bg-neutral-900/70 border border-neutral-850/80 space-y-1">
+                        <div className="text-[10px] font-mono uppercase tracking-wider text-neutral-400 font-semibold flex items-center gap-1">
+                          <span className="text-purple-400">●</span>
+                          <span>{isRTL ? 'علت تشخیص (Why Detected)' : 'Why it was detected'}</span>
+                        </div>
+                        <p className="text-neutral-300 text-xs leading-relaxed">
+                          {detail.why_detected}
+                        </p>
+                      </div>
+
+                      {/* 3. Suggested Rationale */}
+                      <div className="p-2.5 rounded bg-neutral-900/70 border border-neutral-850/80 space-y-1">
+                        <div className="text-[10px] font-mono uppercase tracking-wider text-neutral-400 font-semibold flex items-center gap-1">
+                          <span className="text-emerald-400">●</span>
+                          <span>{isRTL ? 'علت پیشنهاد اقدام (Why action suggested)' : 'Why action is being suggested'}</span>
+                        </div>
+                        <p className="text-neutral-300 text-xs leading-relaxed">
+                          {detail.rationale}
+                        </p>
+                      </div>
+
+                      {/* 4. Risk Assessment */}
+                      <div className="p-2.5 rounded bg-neutral-900/70 border border-neutral-850/80 space-y-1">
+                        <div className="text-[10px] font-mono uppercase tracking-wider text-amber-400/90 font-semibold flex items-center gap-1">
+                          <span>⚠</span>
+                          <span>{isRTL ? 'ریسک احتمالی (Potential risk)' : 'Potential risk'}</span>
+                        </div>
+                        <p className="text-amber-200/90 text-xs leading-relaxed">
+                          {detail.risk}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* 5. User Action */}
+                    <div className="p-2.5 rounded bg-neutral-900 border border-neutral-800 flex items-center justify-between gap-3 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="text-emerald-400 font-mono font-bold">✓</span>
+                        <span className="text-neutral-400 font-medium">
+                          {isRTL ? 'اقدام کاربر (User action):' : 'User action:'}
+                        </span>
+                        <span className="text-emerald-300 font-semibold font-mono">
+                          {detail.user_action}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
         )}
 

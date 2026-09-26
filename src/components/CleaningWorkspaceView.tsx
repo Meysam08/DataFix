@@ -13,7 +13,8 @@ import {
   Copy,
   Hash,
   Type,
-  AlertCircle
+  AlertCircle,
+  Info
 } from 'lucide-react';
 import {
   ActiveDataset,
@@ -213,6 +214,55 @@ export const CleaningWorkspaceView: React.FC<CleaningWorkspaceViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Optional Modeling Target Designation (Requirement 4) */}
+      <div className="p-4 rounded-xl border border-neutral-800 bg-neutral-900/60 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono font-semibold uppercase tracking-wider text-blue-400">
+              {isRTL ? 'تعیین متغیر هدف مدل‌سازی (اختیاری)' : 'Prediction Target Column Designation (Optional)'}
+            </span>
+            {operations.target_column && (
+              <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-blue-950/70 text-blue-300 border border-blue-800/60">
+                {operations.target_column}
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-neutral-400 max-w-2xl leading-relaxed">
+            {isRTL
+              ? 'ستون‌هایی مانند Price و Price(USD) کاندیداهای متغیر هدف هستند. مقادیر فرین متغیر هدف ممکن است مشاهدات کاملاً واقعی باشند و نباید به طور خودکار به عنوان داده پرت حذف یا بریده شوند.'
+              : 'Columns like Price or Price(USD) are target candidates. Extreme target values may be legitimate observations and should generally be investigated before being clipped or removed.'}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <label className="text-xs font-medium text-neutral-300">
+            {isRTL ? 'متغیر هدف:' : 'Target Column:'}
+          </label>
+          <select
+            value={operations.target_column || ''}
+            onChange={(e) => {
+              const val = e.target.value || null;
+              setOperations((prev) => ({
+                ...prev,
+                target_column: val,
+                outlier_actions: val ? { ...prev.outlier_actions, [val]: 'keep' } : prev.outlier_actions,
+              }));
+            }}
+            className="rounded-md border border-neutral-750 bg-neutral-950 px-3 py-1.5 text-xs text-neutral-200 focus:outline-none focus:border-blue-500 font-mono"
+          >
+            <option value="">{isRTL ? '-- تعیین نشده (همه ویژگی معمولی) --' : '-- None designated (all input features) --'}</option>
+            {columns.map((col) => {
+              const isCand = analysis.target_candidates?.includes(col.name) || col.is_target_candidate;
+              return (
+                <option key={col.name} value={col.name}>
+                  {col.name} {isCand ? (isRTL ? '★ کاندیدای هدف' : '★ (Target Candidate)') : ''}
+                </option>
+              );
+            })}
+          </select>
+        </div>
+      </div>
 
       {/* Tabs */}
       <div className="flex flex-wrap items-center gap-1 border-b border-neutral-850 pb-2">
@@ -484,10 +534,10 @@ export const CleaningWorkspaceView: React.FC<CleaningWorkspaceViewProps> = ({
             <h3 className="text-sm font-semibold text-neutral-100">
               {t('outlierSectionTitle')}
             </h3>
-            <p className="text-xs text-neutral-400 mt-1">
+            <p className="text-xs text-neutral-400 mt-1 leading-relaxed">
               {isRTL
-                ? 'انتخاب کنید داده‌های پرت حفظ شوند، سطرهای آنها حذف گردند یا به مرزهای بالا و پایین محدود (Clip) شوند.'
-                : 'Choose whether to keep, remove outlier rows, or clip extreme values to the upper and lower interquartile boundaries.'}
+                ? 'مدیریت آگاه از زمینه داده‌های خارج از بازه IQR. توجه داشته باشید که در ویژگی‌های با توزیع متمرکز (IQR=0) یا متغیرهای هدف پیش‌بینی، داده‌های حدی نباید به طور خودکار محدود (Clip) یا حذف شوند.'
+                : 'Context-aware remediation for values outside IQR bounds. For concentrated distributions (IQR = 0) or prediction targets, extreme values must be reviewed before clipping to avoid destroying valid information.'}
             </p>
           </div>
 
@@ -495,10 +545,10 @@ export const CleaningWorkspaceView: React.FC<CleaningWorkspaceViewProps> = ({
             <table className="w-full text-left text-xs font-mono">
               <thead className="bg-neutral-950/80 text-neutral-400 border-b border-neutral-850">
                 <tr>
-                  <th className="py-2.5 px-4 font-medium">{isRTL ? 'ویژگی' : 'Feature'}</th>
+                  <th className="py-2.5 px-4 font-medium">{isRTL ? 'ویژگی و وضعیت' : 'Feature & Context'}</th>
                   <th className="py-2.5 px-4 font-medium">{isRTL ? 'مرزهای IQR [پایین، بالا]' : 'IQR Bounds [Lower, Upper]'}</th>
                   <th className="py-2.5 px-4 font-medium">{isRTL ? 'تعداد داده پرت' : 'Outlier Count'}</th>
-                  <th className="py-2.5 px-4 font-medium">{isRTL ? 'نمونه مقادیر پرت' : 'Sample Outliers'}</th>
+                  <th className="py-2.5 px-4 font-medium">{isRTL ? 'نمونه مقادیر' : 'Sample Outliers'}</th>
                   <th className="py-2.5 px-4 font-medium">{isRTL ? 'روش اصلاح' : 'Remediation Action'}</th>
                 </tr>
               </thead>
@@ -508,16 +558,45 @@ export const CleaningWorkspaceView: React.FC<CleaningWorkspaceViewProps> = ({
                   .map((col) => {
                     const s = col.stats!;
                     const curAct = operations.outlier_actions[col.name] || 'keep';
+                    const isZeroIqr = s.iqr_is_zero || s.iqr === 0;
+                    const isTarget = operations.target_column === col.name || analysis.target_candidates?.includes(col.name) || col.is_target_candidate;
+                    const isSevereLeverage = (s.upper_bound > 0 && s.max > s.upper_bound * 5) || (s.lower_bound < 0 && s.min < s.lower_bound * 5);
 
                     return (
                       <tr key={col.name} className="hover:bg-neutral-850/40">
-                        <td className="py-3 px-4 font-semibold text-neutral-100 font-mono" dir="ltr">{col.name}</td>
+                        <td className="py-3 px-4 font-semibold text-neutral-100 font-mono">
+                          <div className="flex flex-col gap-1">
+                            <span className="font-bold text-neutral-100" dir="ltr">{col.name}</span>
+                            <div className="flex flex-wrap items-center gap-1 font-sans text-[10px]">
+                              {isZeroIqr && (
+                                <span className="px-1.5 py-0.5 rounded font-mono font-semibold bg-purple-950/70 text-purple-300 border border-purple-800/60">
+                                  {isRTL ? 'توزیع متمرکز (IQR=0)' : 'Degenerate IQR = 0'}
+                                </span>
+                              )}
+                              {isTarget && (
+                                <span className="px-1.5 py-0.5 rounded font-mono font-semibold bg-blue-950/70 text-blue-300 border border-blue-800/60">
+                                  {isRTL ? 'کاندیدای هدف' : 'Target Candidate'}
+                                </span>
+                              )}
+                              {isSevereLeverage && (
+                                <span className="px-1.5 py-0.5 rounded font-mono font-semibold bg-rose-950/70 text-rose-300 border border-rose-800/60">
+                                  {isRTL ? 'اهرم شدید (Leverage)' : 'Severe Leverage'}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </td>
                         <td className="py-3 px-4 tabular-nums text-neutral-400">
                           [{s.lower_bound}, {s.upper_bound}]
+                          {isZeroIqr && (
+                            <div className="text-[10px] text-purple-400/90 font-sans mt-0.5">
+                              {isRTL ? `Q1=میانه=Q3=${s.median}` : `Q1=Med=Q3=${s.median}`}
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-4 tabular-nums">
                           {s.outlier_count > 0 ? (
-                            <span className="text-amber-400 font-semibold">
+                            <span className={isZeroIqr ? 'text-purple-400 font-semibold' : 'text-amber-400 font-semibold'}>
                               {s.outlier_count} {isRTL ? 'مورد' : 'detected'}
                             </span>
                           ) : (
@@ -540,10 +619,14 @@ export const CleaningWorkspaceView: React.FC<CleaningWorkspaceViewProps> = ({
                                 },
                               }));
                             }}
-                            className="rounded-md border border-neutral-750 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-200 focus:outline-none focus:border-blue-500"
+                            className="rounded-md border border-neutral-750 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-200 focus:outline-none focus:border-blue-500 font-sans"
                           >
-                            <option value="keep">{t('outlierKeep')}</option>
-                            <option value="clip">{t('outlierClip')} [{s.lower_bound}, {s.upper_bound}]</option>
+                            <option value="keep">
+                              {t('outlierKeep')} {isZeroIqr || isTarget ? (isRTL ? '(پیشنهادی)' : '(Recommended)') : ''}
+                            </option>
+                            <option value="clip">
+                              {t('outlierClip')} [{s.lower_bound}, {s.upper_bound}] {isZeroIqr ? (isRTL ? '⚠ پرریسک' : '⚠ High Risk') : ''}
+                            </option>
                             <option value="remove">{t('outlierRemove')}</option>
                           </select>
                         </td>
@@ -552,6 +635,18 @@ export const CleaningWorkspaceView: React.FC<CleaningWorkspaceViewProps> = ({
                   })}
               </tbody>
             </table>
+          </div>
+
+          <div className="p-3.5 rounded-lg bg-neutral-950/50 border border-neutral-800 text-xs text-neutral-400 space-y-1">
+            <div className="font-semibold text-neutral-300 flex items-center gap-1.5">
+              <Info className="h-4 w-4 text-blue-400" />
+              <span>{isRTL ? 'راهنمای ایمنی داده‌های پرت (Safe Outlier Guidelines):' : 'Safe Outlier Remediation Guidelines:'}</span>
+            </div>
+            <p className="text-[11px] leading-relaxed">
+              {isRTL
+                ? 'ستون‌هایی با IQR=0 (مانند تعداد اتاق): ۵۰٪ مقادیر مرکزی دقیقاً یکسان هستند. روش IQR در این موارد ناتوان است و محدودسازی مقادیر باعث نابودی اطلاعات معتبر می‌شود. در متغیرهای هدف (مانند قیمت)، مقادیر فرین بخشی از توزیع واقعی هستند و نباید بدون بررسی دقیق برش داده شوند.'
+                : 'Zero-IQR columns (such as Room where central 50% is identical): The IQR rule cannot distinguish statistical outliers because spread is zero. Automatic clipping destroys legitimate variance. For target variables (such as Price), extreme values are valid distribution tails and should not be modified without explicit investigation.'}
+            </p>
           </div>
         </div>
       )}

@@ -13,6 +13,7 @@ export interface ColumnStats {
   upper_bound: number;
   outlier_count: number;
   sample_outliers: number[];
+  iqr_is_zero?: boolean;
 }
 
 export interface ColumnDetail {
@@ -28,6 +29,8 @@ export interface ColumnDetail {
   stats: ColumnStats | null;
   type_inconsistencies: number;
   sample_values: string[];
+  is_target_candidate?: boolean;
+  collinear_with?: { column: string; correlation: number }[];
 }
 
 export interface DetectedIssue {
@@ -36,6 +39,9 @@ export interface DetectedIssue {
   column?: string;
   description: string;
   recommendation: string;
+  confidence?: 'informational' | 'review' | 'actionable';
+  detection_type?: 'structural' | 'missing' | 'duplicate' | 'outlier' | 'collinearity' | 'type';
+  risk?: string;
 }
 
 export interface MalformedRowDetail {
@@ -60,6 +66,12 @@ export interface ScoreBreakdown {
   outlier_penalty: number;
 }
 
+export interface CollinearPair {
+  col1: string;
+  col2: string;
+  correlation: number;
+}
+
 export interface DatasetAnalysis {
   rows: number;
   columns: ColumnDetail[];
@@ -73,6 +85,9 @@ export interface DatasetAnalysis {
   detected_issues: DetectedIssue[];
   preview_rows: Record<string, any>[];
   csv_structure?: CsvStructure;
+  target_column?: string | null;
+  target_candidates?: string[];
+  collinear_pairs?: CollinearPair[];
 }
 
 export interface MissingActionConfig {
@@ -98,6 +113,7 @@ export interface CleaningOperations {
   rename_columns: Record<string, string>;
   filter_rules: FilterRule[];
   outlier_actions: Record<string, 'keep' | 'remove' | 'clip'>;
+  target_column?: string | null;
 }
 
 export interface DiffSample {
@@ -106,6 +122,17 @@ export interface DiffSample {
   original: string;
   new: string;
   action: string;
+}
+
+export interface OperationAuditDetail {
+  category: 'integrity' | 'deterministic' | 'missing' | 'duplicates' | 'outliers' | 'types' | 'columns' | 'filters' | 'user_selected';
+  column?: string;
+  detection: string;
+  why_detected: string;
+  rationale: string;
+  risk: string;
+  confidence: 'informational' | 'review' | 'actionable';
+  user_action: string;
 }
 
 export interface TransformPreviewResult {
@@ -120,6 +147,7 @@ export interface TransformPreviewResult {
   new_quality_score: number;
   new_analysis: DatasetAnalysis;
   applied_operations: string[];
+  operation_details?: OperationAuditDetail[];
   warnings: string[];
   diff_samples: DiffSample[];
   preview_rows: Record<string, any>[];
