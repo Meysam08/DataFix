@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Wrench,
   CheckCircle2,
@@ -50,21 +50,28 @@ export const CleaningWorkspaceView: React.FC<CleaningWorkspaceViewProps> = ({
   const { columns, duplicate_rows, missing_values } = analysis;
 
   // Initialize operations state
-  const [operations, setOperationsState] = useState<CleaningOperations>(() => {
+  const [operations, setOperations] = useState<CleaningOperations>(() => {
     return dataset.operations || getDefaultOperations(analysis);
   });
 
-  const setOperations = (
-    updater: CleaningOperations | ((prev: CleaningOperations) => CleaningOperations)
-  ) => {
-    setOperationsState((prev) => {
-      const next = typeof updater === 'function' ? updater(prev) : updater;
-      if (onUpdateOperations) {
-        onUpdateOperations(next);
-      }
-      return next;
-    });
-  };
+  // Track initial mount so we don't trigger unnecessary parent state update on mount
+  const isInitialMount = useRef(true);
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    if (onUpdateOperations) {
+      onUpdateOperations(operations);
+    }
+  }, [operations, onUpdateOperations]);
+
+  // Sync operations if active dataset changes
+  useEffect(() => {
+    if (dataset.operations) {
+      setOperations(dataset.operations);
+    }
+  }, [dataset.id]);
 
   const [activeTab, setActiveTab] = useState<
     'missing' | 'duplicates' | 'outliers' | 'types' | 'columns' | 'filters'
